@@ -1,3 +1,4 @@
+#include "Arduino.h"
 #include "circular_buffer.h"
 
 /**
@@ -27,10 +28,14 @@ class ErrorHandler {
     
     public:
         static constexpr Error radioInitFail{1, 1};        
+        static constexpr Error radioFreqSetFail{2, 1};
 
         static void addError(Error error);
         static bool hasError();
+        static void serialOut();
   
     private:
-        Circular_Buffer<Error, 256> errorBuffer;
+        static Circular_Buffer<Error, 256> errorBuffer;
+        static bool serialConn;
+
 };

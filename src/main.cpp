@@ -1,6 +1,7 @@
 #include <Arduino.h>
 
 #include "gimbal.h"
+#include "radio.h"
 
 #define onboard 13;
 
@@ -15,6 +16,8 @@ void setup() {
   Gimbal::selfTest();
 
   Gimbal::zero();
+
+  Radio::setup();
 
 
 }

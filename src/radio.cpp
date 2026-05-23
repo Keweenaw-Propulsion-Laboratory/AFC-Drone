@@ -3,18 +3,94 @@
 
 #include "error.h"
 
-// Construct the radio driver
-RH_RF95 Radio::radio = RH_RF95(RFM69_CS, RFM69_INT);
+// Initialize static variables
+RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
+uint8_t Radio::packetNum = 0; // Set packet number to zero;
+
 
 void Radio::setup() {
+    while(!Serial); // Wait for a serial connection
+    Serial.println("Init Radio");
+
     pinMode(RFM69_RST, OUTPUT); // Define the reset pin
+    // Run reset sequence
+    digitalWrite(RFM69_RST, LOW);
+    delay(10);
+    digitalWrite(RFM69_RST, HIGH);
+    delay(10);
+    digitalWrite(RFM69_RST, LOW);
+    delay(10);
 
     if( !radio.init() ) {
         ErrorHandler::addError(ErrorHandler::radioInitFail);
+        Serial.println("Radio start failed");
+        return;
     }
 
+    if (!radio.setFrequency(RF69_FREQ)){
+        ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
+        Serial.println("failed to set radio freq");
+        return;
+    }
+
+    // Encryption key must match the receiver (16 bytes exactly)
+    uint8_t key[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                      0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+    radio.setEncryptionKey(key);  
+
+
+    radio.setTxPower(20, true); // 20 dbm , Enable high power antenna.
+    // Power range is between 14 and 20dbm. 
+    // This is the high power variant and we need to enable the high power antenna. 
+
+    Serial.println("Radio Init Good");
+    // No encryption at this time
+
+
+    // Send a test message
+    uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
+    
+
+    sendMessage(testMessage, sizeof(testMessage), SETUP);
+
+    radio.waitPacketSent();
+
+    uint8_t message[RH_RF69_MAX_MESSAGE_LEN];
+    uint8_t messSize = sizeof(message);
+
+    // Wait for BaseStation to respond to confirm connection. 
+    do {
+        getMessage( message, messSize);
+        delay(500);
+        Serial.println("Waiting for ack");
+    } while (message[0] != ACK[0]);
+
+    Serial.println("BaseStation connected");
 }
 
-void Radio::sendMessage() {
+void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
+    radio.waitPacketSent(); // Wait for any previous packet to be sent
+
+    radio.setHeaderId(packetNum); // Set the packet Id to the current packet number
+    radio.setHeaderFlags(type); // Set the flags to the type of message.
+
+    radio.send(data, dataSize); // Send the data
+}
+
+/**
+ * @return Will return true when there is a message. 
+ * Will return false if there is no message available.
+ */
+bool Radio::getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
+                        , uint8_t& bufferLength ) {
+
+    // If radio has no message return false
+    if(!radio.available()) {return false;}
+
+    // If the message was valid then put it in the given buffer
+    if (!radio.recv(buffer, &bufferLength)) {return false;}
+
+    // Message recieved successfully
+    return true;
 
 }

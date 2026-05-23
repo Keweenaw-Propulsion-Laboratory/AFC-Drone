@@ -1,22 +1,33 @@
 #include <SPI.h>
-#include <RH_RF95.h>
+#include <RH_RF69.h>
 
 #define RF69_FREQ 915.0
 
-#define RFM69_CS    4  //
-#define RFM69_INT   3  //
-#define RFM69_RST   2  // "A"
+#define RFM69_CS    10  //
+#define RFM69_INT   40 //
+#define RFM69_RST   41  // "A"
 #define LED        13
 
 class Radio {
     public:
-        void setup();
-        void sendMessage();
-        void getMessage();
+        enum MessageType {
+            SETUP = 0,   
+            TELEMETRY = 1
+        };
+
+
+        static void setup();
+        static void sendMessage(uint8_t data[], uint8_t dataSize, MessageType type);
+        static bool getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
+                                , uint8_t& bufferLength );
         
 
+
     private:
-    static RH_RF95 radio;
+    static RH_RF69 radio;
+    static uint8_t packetNum;
+
+    static constexpr uint8_t ACK[8] = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
 
     #pragma pack(push, 1)
     /**

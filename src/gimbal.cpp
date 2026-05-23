@@ -9,6 +9,7 @@
 Servo Gimbal::pitchServo;
 Servo Gimbal::yawServo;
 
+
 void Gimbal::setup() {
     pitchServo.attach(PITCH_SERVO_PIN);
     yawServo.attach(YAW_SERVO_PIN);
