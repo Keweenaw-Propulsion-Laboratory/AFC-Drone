@@ -23,6 +23,7 @@ class Radio {
 
 
         static bool setup();
+        static bool setupComplete();
         static void sendMessage(uint8_t data[], uint8_t dataSize, MessageType type);
         static bool getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                                 , uint8_t& bufferLength );

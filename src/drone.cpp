@@ -22,7 +22,12 @@ void Drone::startup() {
         break;
     
     case DroneStates::RADIO_SETUP :
-        Radio::setup();
+        if(!Radio::setup()) {
+            state = DroneStates::FAULT_ERROR;
+        }
+
+        if (Radio::setupComplete())
+            state = DroneStates::SENSOR_SETUP;
 
         break;
 

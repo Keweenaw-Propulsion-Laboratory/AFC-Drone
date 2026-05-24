@@ -14,75 +14,117 @@ enum RadioSetupStates {
     RESET1,
     RESET2,
     RADIO_INIT,
-    SET_FREQ,
+    SET_CONFIG,
     SEND_CONN,
     WAIT_ACK,
     COMPLETE
 };
 
+RadioSetupStates Radio::setupState = RESET1;
+
+
+/**
+ * Performs setup on the radio module.
+ * 
+ * @return Will return true if stage completed successfully
+ * Will return false if an error occured. All errors should
+ * be treated as fatal
+ */
 bool Radio::setup() {
-    while(!Serial); // Wait for a serial connection
-    Serial.println("Init Radio");
 
-    pinMode(RFM69_RST, OUTPUT); // Define the reset pin
-    // Run reset sequence
-    digitalWrite(RFM69_RST, LOW);
-    digitalWrite(RFM69_RST, HIGH);
-    delay(10);
-    digitalWrite(RFM69_RST, LOW);
-    delay(10);
+    // A variable to help with timing during the setup process
+    static int setupTimmer;
+    switch (setupState) {
+        case RadioSetupStates::RESET1 :
+                pinMode(RFM69_RST, OUTPUT); // Define the reset pin
+                // Run reset sequence
+                digitalWrite(RFM69_RST, HIGH);
 
-    if( !radio.init() ) {
-        ErrorHandler::addError(ErrorHandler::radioInitFail);
-        Serial.println("Radio start failed");
-        return false;
-    }
+                setupTimmer = millis();
 
-    if (!radio.setFrequency(RF69_FREQ)){
-        ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-        Serial.println("failed to set radio freq");
-        return false;
-    }
-
-    // Encryption key must match the receiver (16 bytes exactly)
-    uint8_t key[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
-                      0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
-    radio.setEncryptionKey(key);  
-
-
-    radio.setTxPower(20, true); // 20 dbm , Enable high power antenna.
-    // Power range is between 14 and 20dbm. 
-    // This is the high power variant and we need to enable the high power antenna. 
-
-    Serial.println("Radio Init Good");
-    // No encryption at this time
-
-    uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
-
-    uint8_t message[RH_RF69_MAX_MESSAGE_LEN];
-    uint8_t messSize = sizeof(message);
-    // Send a test message
+                setupState = RESET2;
+                return true;
+            break;
         
+        case RadioSetupStates::RESET2 :
+            if (millis() > setupTimmer + 10){
+                digitalWrite(RFM69_RST, LOW);
+                return false;
+            }
 
-    sendMessage(testMessage, sizeof(testMessage), SETUP);
+            if (millis() > setupTimmer + 20){
+                setupState = RADIO_INIT;
+            }
 
-    radio.waitPacketSent();
+            break;
+        
+        case RadioSetupStates::RADIO_INIT :
+            if( !radio.init() ) {
+                ErrorHandler::addError(ErrorHandler::radioInitFail);
+                Serial.println("Radio start failed");
+                return false;
+            }
+            return true;
+            break;
 
+        case RadioSetupStates::SET_CONFIG :
+                if (!radio.setFrequency(RF69_FREQ)){
+                    ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
+                    Serial.println("failed to set radio freq");
+                    return false;
+                }
 
+                // Encryption key must match the receiver (16 bytes exactly)
+                uint8_t key[] = { 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
+                                0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
+                radio.setEncryptionKey(key);  
 
-    // Wait for BaseStation to respond to confirm connection. 
-    
-    getMessage( message, messSize);
-    delay(500);
-    Serial.println("Waiting for ack");
-    
-    if (message[0] != ACK[0]) {
+                radio.setTxPower(20, true); // 20 dbm , Enable high power antenna.
+                // Power range is between 14 and 20dbm. 
+                // This is the high power variant and we need to enable the high power antenna. 
+
+                return true;
+            break;
+        
+        case RadioSetupStates::SEND_CONN :
+            setupTimmer = millis(); // Record time of sent connection ping
+            uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
+            sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+        
+            break;
+
+        case RadioSetupStates::WAIT_ACK :
+            
+            // Check for ack
+            uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
+            uint8_t buffLength;
+            if (!getMessage(recvBuffer, buffLength)) {
+                // If no message was ready in the buffer return to loop
+                return true;
+            }
+
+            if (buffLength = 8 && recvBuffer[0] == ACK[0]){
+                setupState = COMPLETE;
+                return true;
+            }
+
+            // Go back to sending a message if the ack hasnt been received
+            if(millis() < setupTimmer + 1000) {
+                setupState = SEND_CONN;
+            }
+
+            break;
+
+        default :
 
     }
 
-    Serial.println("BaseStation connected");
+    return false;
 
-    return true;
+}
+
+bool Radio::setupComplete() {
+    return setupState == COMPLETE;
 }
 
 void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
