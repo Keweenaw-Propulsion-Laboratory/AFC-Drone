@@ -7,15 +7,26 @@
 RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
 uint8_t Radio::packetNum = 0; // Set packet number to zero;
 
+/**
+ * Keeps track of the different stages of Radio setup
+ */
+enum RadioSetupStates {
+    RESET1,
+    RESET2,
+    RADIO_INIT,
+    SET_FREQ,
+    SEND_CONN,
+    WAIT_ACK,
+    COMPLETE
+};
 
-void Radio::setup() {
+bool Radio::setup() {
     while(!Serial); // Wait for a serial connection
     Serial.println("Init Radio");
 
     pinMode(RFM69_RST, OUTPUT); // Define the reset pin
     // Run reset sequence
     digitalWrite(RFM69_RST, LOW);
-    delay(10);
     digitalWrite(RFM69_RST, HIGH);
     delay(10);
     digitalWrite(RFM69_RST, LOW);
@@ -24,13 +35,13 @@ void Radio::setup() {
     if( !radio.init() ) {
         ErrorHandler::addError(ErrorHandler::radioInitFail);
         Serial.println("Radio start failed");
-        return;
+        return false;
     }
 
     if (!radio.setFrequency(RF69_FREQ)){
         ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
         Serial.println("failed to set radio freq");
-        return;
+        return false;
     }
 
     // Encryption key must match the receiver (16 bytes exactly)
@@ -46,26 +57,32 @@ void Radio::setup() {
     Serial.println("Radio Init Good");
     // No encryption at this time
 
-
-    // Send a test message
     uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
-    
+
+    uint8_t message[RH_RF69_MAX_MESSAGE_LEN];
+    uint8_t messSize = sizeof(message);
+    // Send a test message
+        
 
     sendMessage(testMessage, sizeof(testMessage), SETUP);
 
     radio.waitPacketSent();
 
-    uint8_t message[RH_RF69_MAX_MESSAGE_LEN];
-    uint8_t messSize = sizeof(message);
+
 
     // Wait for BaseStation to respond to confirm connection. 
-    do {
-        getMessage( message, messSize);
-        delay(500);
-        Serial.println("Waiting for ack");
-    } while (message[0] != ACK[0]);
+    
+    getMessage( message, messSize);
+    delay(500);
+    Serial.println("Waiting for ack");
+    
+    if (message[0] != ACK[0]) {
+
+    }
 
     Serial.println("BaseStation connected");
+
+    return true;
 }
 
 void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {

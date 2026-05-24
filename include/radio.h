@@ -12,11 +12,17 @@ class Radio {
     public:
         enum MessageType {
             SETUP = 0,   
-            TELEMETRY = 1
+            TELEMETRY = 1,
+            LOOPTIMES = 2
+        };
+
+        enum RadioStates {
+            HARDWARE_INIT,
+
         };
 
 
-        static void setup();
+        static bool setup();
         static void sendMessage(uint8_t data[], uint8_t dataSize, MessageType type);
         static bool getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                                 , uint8_t& bufferLength );
