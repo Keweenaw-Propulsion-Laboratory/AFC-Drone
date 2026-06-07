@@ -7,20 +7,9 @@
 RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
 uint8_t Radio::packetNum = 0; // Set packet number to zero;
 
-/**
- * Keeps track of the different stages of Radio setup
- */
-enum RadioSetupStates {
-    RESET1,
-    RESET2,
-    RADIO_INIT,
-    SET_CONFIG,
-    SEND_CONN,
-    WAIT_ACK,
-    COMPLETE
-};
 
-RadioSetupStates Radio::setupState = RESET1;
+
+Radio::RadioSetupStates Radio::setupState = RESET1;
 
 
 /**
@@ -33,7 +22,7 @@ RadioSetupStates Radio::setupState = RESET1;
 bool Radio::setup() {
 
     // A variable to help with timing during the setup process
-    static int setupTimmer;
+    static uint32_t setupTimmer;
     switch (setupState) {
         case RadioSetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
@@ -47,7 +36,7 @@ bool Radio::setup() {
             break;
         
         case RadioSetupStates::RESET2 :
-            if (millis() > setupTimmer + 10){
+            if (millis() > (setupTimmer + 10)){
                 digitalWrite(RFM69_RST, LOW);
                 return false;
             }
@@ -67,7 +56,7 @@ bool Radio::setup() {
             return true;
             break;
 
-        case RadioSetupStates::SET_CONFIG :
+        case RadioSetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
                     Serial.println("failed to set radio freq");
@@ -84,16 +73,18 @@ bool Radio::setup() {
                 // This is the high power variant and we need to enable the high power antenna. 
 
                 return true;
+        }
             break;
         
-        case RadioSetupStates::SEND_CONN :
+        case RadioSetupStates::SEND_CONN : {
             setupTimmer = millis(); // Record time of sent connection ping
             uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
             sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+            return true;
         
-            break;
-
-        case RadioSetupStates::WAIT_ACK :
+        break;
+        }
+        case RadioSetupStates::WAIT_ACK : {
             
             // Check for ack
             uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
@@ -103,7 +94,7 @@ bool Radio::setup() {
                 return true;
             }
 
-            if (buffLength = 8 && recvBuffer[0] == ACK[0]){
+            if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
                 setupState = COMPLETE;
                 return true;
             }
@@ -111,12 +102,12 @@ bool Radio::setup() {
             // Go back to sending a message if the ack hasnt been received
             if(millis() < setupTimmer + 1000) {
                 setupState = SEND_CONN;
+                }
             }
-
             break;
 
         default :
-
+            break;
     }
 
     return false;

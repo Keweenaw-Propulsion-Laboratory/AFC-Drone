@@ -18,7 +18,9 @@ class Drone {
 
     private:
         static DroneStates state;
+        static bool hasSerial;
 
         static void updateLEDS();
-
+        static void ledFader();
+        static void doubleFlash();
 };

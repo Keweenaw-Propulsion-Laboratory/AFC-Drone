@@ -4,6 +4,7 @@
 #include "gyro.h"
 #include "gimbal.h"
 #include "error.h" 
+#include "debug.h"
 
 /**
  * Performs the startup sequence
@@ -16,6 +17,10 @@ void Drone::startup() {
     case DroneStates::BOOT:
         // This state handles any internal initialization that the controller may need to do
         pinMode(STATUS_LED, OUTPUT);
+
+        // Check if there is a serial connection
+        Debug::checkSerial();
+        
         
         // Transition to next state
         state = DroneStates::RADIO_SETUP;
@@ -32,7 +37,15 @@ void Drone::startup() {
         break;
 
     case DroneStates::SENSOR_SETUP :
+        // Needs to init Gryo. Any other sensors can also go in here
 
+        if (!Gyro::setup()) {
+            state = DroneStates::FAULT_ERROR;
+        }
+
+        if (Gyro::setupComplete()) {
+            state = DroneStates::READY_ARMED;
+        }
 
         break;
 
@@ -43,6 +56,12 @@ void Drone::startup() {
 
 
 }
+
+void Drone::update() {
+    
+    return;
+}
+
 
 /**
  * Helper class to update status LEDS to inform us of current state
@@ -83,7 +102,7 @@ void Drone::updateLEDS() {
     }
 }
 
-void ledFader() {
+void Drone::ledFader() {
     // The total time in milliseconds for one full breathe cycle (inhale + exhale)
     const float breathePeriodMs = 2000.0f; 
     
@@ -99,7 +118,7 @@ void ledFader() {
     return; // Exit early so standard blinking code below doesn't override this
 }
 
-void doubleFlash() {
+void Drone::doubleFlash() {
 const uint32_t cycleDuration = 1200; // Total duration of the pattern in ms
         
         // This collapses the infinite timeline of millis() into a repeating 0-1199ms window

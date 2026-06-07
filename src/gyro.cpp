@@ -1,34 +1,49 @@
 #include "gyro.h"
+#include "debug.h"
+
 
 Adafruit_BNO08x Gyro::gyro(GYRO_RESET);
 Gyro::euler_t Gyro::ypr;
 
-void Gyro::setup() {
-    while(!Serial) delay(10); // Wait for serial to be available
+Gyro::GyroSetupStates Gyro::state = Gyro::GyroSetupStates::I2C; 
 
-    Serial.println("Gyro BN0085 setup");
+bool Gyro::setup() {
 
-    // Begin setup
+    switch (state)
+    {
+    case Gyro::GyroSetupStates::I2C :
+        if (! gyro.begin_I2C()) {
+            // TODO add error
 
-    if (! gyro.begin_I2C()) {
-        Serial.println("Failed to start gyro");
-    }
-
-    Serial.println("BN0085 connected");
-
-    /*
-    This section of the setup determines what kind of data we want to 
-    get from the Gyro. The different report types can be found at the link below
-    https://learn.adafruit.com/adafruit-9-dof-orientation-imu-fusion-breakout-bno085/report-types
-
-    */
-    if (! gyro.enableReport(SH2_ARVR_STABILIZED_RV, 10000)) { // 100 hz
-        Serial.println("Could not enable stabilized remote vector");
-    }
+            return false;
+        }
+        break;
     
+    case Gyro::GyroSetupStates::EnableReport :
+        Debug::println("BN0085 connected");
+        /*
+        This section of the setup determines what kind of data we want to 
+        get from the Gyro. The different report types can be found at the link below
+        https://learn.adafruit.com/adafruit-9-dof-orientation-imu-fusion-breakout-bno085/report-types
+
+        */
+        if (! gyro.enableReport(SH2_ARVR_STABILIZED_RV, 10000)) { // 100 hz
+            Debug::println("Could not enable stabilized remote vector");
+            return false;
+        }
+
+        break;  
+    default:
+        return false;
+        break;
+
+    }
+
 }
 
-
+bool Gyro::setupComplete() {
+    return state == GyroSetupStates::Complete;
+}
 
 void Gyro::quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees) {
 

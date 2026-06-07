@@ -21,6 +21,19 @@ class Radio {
 
         };
 
+        /**
+        * Keeps track of the different stages of Radio setup
+        */
+        enum RadioSetupStates: uint8_t{
+            RESET1,
+            RESET2,
+            RADIO_INIT,
+            SET_CONFIG,
+            SEND_CONN,
+            WAIT_ACK,
+            COMPLETE
+        };
+
 
         static bool setup();
         static bool setupComplete();

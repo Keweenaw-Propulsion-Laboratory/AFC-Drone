@@ -13,7 +13,8 @@ class Gyro{
     static euler_t ypr;
 
     // Functions
-    static void setup();
+    static bool setup();
+    static bool setupComplete();
     static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees = false);
     static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees = false);
     static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees = false);
@@ -23,4 +24,13 @@ class Gyro{
     static Adafruit_BNO08x gyro;
     static sh2_SensorValue_t sensorValue;
 
+    private: 
+
+        enum GyroSetupStates : uint8_t {
+            I2C,
+            EnableReport,
+            Complete
+        };
+
+        static GyroSetupStates state;
 };
