@@ -38,7 +38,7 @@ bool Gyro::setup() {
         break;
 
     }
-
+    return false;
 }
 
 bool Gyro::setupComplete() {

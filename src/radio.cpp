@@ -2,6 +2,7 @@
 #include "Arduino.h"
 
 #include "error.h"
+#include "debug.h"
 
 // Initialize static variables
 RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
@@ -50,7 +51,7 @@ bool Radio::setup() {
         case RadioSetupStates::RADIO_INIT :
             if( !radio.init() ) {
                 ErrorHandler::addError(ErrorHandler::radioInitFail);
-                Serial.println("Radio start failed");
+                Debug::println("Radio start failed");
                 return false;
             }
             return true;
@@ -59,7 +60,7 @@ bool Radio::setup() {
         case RadioSetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-                    Serial.println("failed to set radio freq");
+                    Debug::println("failed to set radio freq");
                     return false;
                 }
 
@@ -89,23 +90,27 @@ bool Radio::setup() {
             // Check for ack
             uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
             uint8_t buffLength;
+
+            // Check if there is an ack waiting
             if (!getMessage(recvBuffer, buffLength)) {
-                // If no message was ready in the buffer return to loop
-                return true;
+                // Go back to sending a message if the ack hasnt been received after 1 second
+                if(millis() < setupTimmer + 1000) {
+                    Debug::println("BaseStation not connected. Retrying... ");
+                    setupState = SEND_CONN;
+                }
+                return true; // Return back to loop
             }
 
+            // Check if correct ack was recieved 
             if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
+                // Update state to complete the radio init
                 setupState = COMPLETE;
                 return true;
             }
-
-            // Go back to sending a message if the ack hasnt been received
-            if(millis() < setupTimmer + 1000) {
-                setupState = SEND_CONN;
-                }
-            }
+            // Return to loop
+            return true;
             break;
-
+        }
         default :
             break;
     }

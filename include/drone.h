@@ -12,7 +12,7 @@ class Drone {
         FAULT_ERROR
     };
     
-    static void startup();
+    static bool startup();
     static void update();
 
 

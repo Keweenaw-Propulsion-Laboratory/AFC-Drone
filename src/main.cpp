@@ -8,22 +8,12 @@
 #define onboard 13
 
 #define LOOPTIME 1000
+#define AlPHA_SMOOTHING 0.1f
+
+#define LOOP_STATUS_INTERVAL 2000 // 2000 ms
 
 void setup() {
-    // put your setup code here, to run once:
-    Gimbal::setup();
-    Gimbal::zero();
-
-    delay(1000);
-
-    Gimbal::selfTest();
-
-    Gimbal::zero();
-
-    Radio::setup();
-
-    Gyro::setup();
-
+    while (!Drone::startup()) {}
 
 }
 
@@ -32,18 +22,18 @@ void loop() {
     static uint32_t worstTime = 0; // Keep track of our worst case loop time
     static uint32_t bestTime = -1; // Keep track of our best case loop time
 
-
-
     static uint32_t startTime = micros(); // What time is it currently?
   
+    // MARK: Control Loop Logic
     Drone::update(); // Perform flight logic
 
+    // End of Control Loop Logic
 
     static uint32_t currentLoopCost = micros() - startTime; // How long did the loop take
 
     static float rollingAverage = 0.0f;
     // Alpha controls smoothing. 0.01 means the average changes smoothly over ~100 loops.
-    const float alpha = 0.01f; 
+    const float alpha = AlPHA_SMOOTHING; 
     
     if (rollingAverage == 0.0f) {
         rollingAverage = (float)currentLoopCost; // Initialize on the very first boot loop
@@ -56,8 +46,9 @@ void loop() {
 
     // Last time that a status message has been sent
     static uint16_t lastStatus = 0;
-    // Send a status message every 2 seconds
-    if (millis() - lastStatus > 2000) {
+    
+    // Send a status message every LOOP_STATUS_INTERVAL
+    if (millis() - lastStatus > LOOP_STATUS_INTERVAL) {
         static uint8_t statusMessage[8];
 
         statusMessage[7] = ((bestTime >> 8) & 0xFF); // Upper 8 bits of best time

@@ -9,7 +9,7 @@
 /**
  * Performs the startup sequence
  */
-void Drone::startup() {
+bool Drone::startup() {
     // Step 1 Radio
     
     switch (state)
@@ -18,32 +18,44 @@ void Drone::startup() {
         // This state handles any internal initialization that the controller may need to do
         pinMode(STATUS_LED, OUTPUT);
 
-        // Check if there is a serial connection
-        Debug::checkSerial();
+        // Check if there is a serial connection.
+        // If true then move on with loop
+        if(!Debug::checkSerial()) {return;}
         
         
         // Transition to next state
         state = DroneStates::RADIO_SETUP;
+        Debug::println("DRONE: State progressing from BOOT to RADIO_SETUP");
         break;
     
     case DroneStates::RADIO_SETUP :
         if(!Radio::setup()) {
             state = DroneStates::FAULT_ERROR;
+            Debug::println("DRONE: SETUP FAILURE in stage RADIO_SETUP");
         }
 
-        if (Radio::setupComplete())
+        if (Radio::setupComplete()) {
             state = DroneStates::SENSOR_SETUP;
-
+            Debug::println("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
+        }
         break;
 
     case DroneStates::SENSOR_SETUP :
         // Needs to init Gryo. Any other sensors can also go in here
 
+        // Run setup functions here
         if (!Gyro::setup()) {
             state = DroneStates::FAULT_ERROR;
+            Debug::println("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
         }
 
-        if (Gyro::setupComplete()) {
+        // if (!GPS::setup()) {
+        //     state = DroneStates::FAULT_ERROR;
+        //     Debug::println("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS")
+        // }
+
+        // Check for complete here. 
+        if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
             state = DroneStates::READY_ARMED;
         }
 
@@ -53,7 +65,7 @@ void Drone::startup() {
         break;
     }
 
-
+    return state == DroneStates::READY_ARMED;
 
 }
 
