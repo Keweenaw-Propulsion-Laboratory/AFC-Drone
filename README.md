@@ -34,3 +34,7 @@ Blink | 300ms | SENSOR_SETUP | The controller has made a connection to the BaseS
 Fade | 2000ms | READY_ARMED | The vehicle has completed initial setup and is in a ready state. 
 Double Blink | 1200ms | FLIGHT | The vehicle is in a state that allows flight. This could include a ready for take off or landing state. 
 Blink | 50ms | FAULT_ERROR | The controller has detected an error. 
+
+## Hardware Layout
+![AFC-Drone Flight Computer wiring diagram](docs/AFC-Drone_Flight_Computer.png)
+The wiring diagram was made in KiCAD 9.0 and can be found in our [wiring diagram repository](https://github.com/Keweenaw-Propulsion-Laboratory/AFC-Wiring-Diagram)

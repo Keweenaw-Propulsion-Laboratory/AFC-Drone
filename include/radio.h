@@ -33,6 +33,8 @@ class Radio {
     private:
     static RH_RF69 radio;
     static uint8_t packetNum;
+    
+    static RadioSetupStates setupState;
 
     static constexpr uint8_t ACK[8] = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
 
