@@ -36,5 +36,5 @@ Double Blink | 1200ms | FLIGHT | The vehicle is in a state that allows flight. T
 Blink | 50ms | FAULT_ERROR | The controller has detected an error. 
 
 ## Hardware Layout
-![AFC-Drone Flight Computer wiring diagram](docs/AFC-Drone_Flight_Computer.png)
+![AFC-Drone Flight Computer wiring diagram](docs/front_page/AFC-Drone_Flight_Computer.png)
 The wiring diagram was made in KiCAD 9.0 and can be found in our [wiring diagram repository](https://github.com/Keweenaw-Propulsion-Laboratory/AFC-Wiring-Diagram)
