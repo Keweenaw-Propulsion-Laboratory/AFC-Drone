@@ -14,9 +14,10 @@ bool Gyro::setup() {
     case Gyro::GyroSetupStates::I2C :
         if (! gyro.begin_I2C()) {
             // TODO add error
-
+            Debug::println("Gyro I2C failed");
             return false;
         }
+        state = EnableReport;
         break;
     
     case Gyro::GyroSetupStates::EnableReport :
@@ -31,14 +32,15 @@ bool Gyro::setup() {
             Debug::println("Could not enable stabilized remote vector");
             return false;
         }
-
+        Debug::println("Gyro Complete");
+        state = Complete;
         break;  
     default:
         return false;
         break;
 
     }
-    return false;
+    return true;
 }
 
 bool Gyro::setupComplete() {

@@ -27,6 +27,20 @@ class Debug {
             Serial.println(message);
         }
 
+        /**
+         * Wrapper function for Serial.print()
+         * 
+         * Writes to USB serial when a connection is detected
+         * at start up. 
+         */
+        template <typename type>
+        static void print(type message) {
+            if (!hasSerial) {return;}
+
+            Serial.print(message);
+        }
+
+
     private:
         /**
          * True if a serial connection was established in checkSerial.
