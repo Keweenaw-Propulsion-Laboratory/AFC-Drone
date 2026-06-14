@@ -136,6 +136,18 @@ bool Radio::setupComplete() {
     return setupState == COMPLETE;
 }
 
+
+void Radio::update() {
+    
+
+
+}
+
+
+
+
+
+
 void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
     radio.waitPacketSent(); // Wait for any previous packet to be sent
 
