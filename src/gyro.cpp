@@ -84,24 +84,26 @@ void Gyro::update(){
         current_qY = quad.j;
         current_qZ = quad.k;
 
-        // 3D Math to extract Pitch, Roll, Yaw
-        float ysqr = current_qW * current_qW;
+        quaternionToEuler(current_qW, current_qX, current_qY, current_qZ, true);
+
+        // // 3D Math to extract Pitch, Roll, Yaw
+        // float ysqr = current_qY * current_qY;
         
-        // Pitch (X-axis rotation)
-        float t0 = +2.0f * (current_qW * current_qX + current_qW * current_qZ);
-        float t1 = +1.0f - 2.0f * (current_qX * current_qX + ysqr);
-        ypr.pitch = atan2(t0, t1) * RAD_TO_DEG;
+        // // Pitch (X-axis rotation)
+        // float t0 = +2.0f * (current_qW * current_qX + current_qW * current_qZ);
+        // float t1 = +1.0f - 2.0f * (current_qX * current_qX + ysqr);
+        // ypr.pitch = atan2(t0, t1) * RAD_TO_DEG;
 
-        // roll (Y-axis rotation)
-        float t2 = +2.0f * (current_qW * current_qY - current_qZ * current_qX);
-        t2 = t2 > 1.0f ? 1.0f : t2;
-        t2 = t2 < -1.0f ? -1.0f : t2;
-        ypr.roll = asin(t2) * RAD_TO_DEG;
+        // // roll (Y-axis rotation)
+        // float t2 = +2.0f * (current_qW * current_qY - current_qZ * current_qX);
+        // t2 = t2 > 1.0f ? 1.0f : t2;
+        // t2 = t2 < -1.0f ? -1.0f : t2;
+        // ypr.roll = asin(t2) * RAD_TO_DEG;
 
-        // Yaw (Z-axis rotation)
-        float t3 = +2.0f * (current_qW * current_qZ + current_qX * current_qY);
-        float t4 = +1.0f - 2.0f * (ysqr + current_qZ * current_qZ);
-        ypr.yaw = atan2(t3, t4) * RAD_TO_DEG;
+        // // Yaw (Z-axis rotation)
+        // float t3 = +2.0f * (current_qW * current_qZ + current_qX * current_qY);
+        // float t4 = +1.0f - 2.0f * (ysqr + current_qZ * current_qZ);
+        // ypr.yaw = atan2(t3, t4) * RAD_TO_DEG;
     }
 
     // Handle incoming Acceleration packet
@@ -113,32 +115,34 @@ void Gyro::update(){
         // 1. Rotate raw acceleration into world frame using the last known quaternion orientation
         transformToWorldFrame(current_qW, current_qX, current_qY, current_qZ, ax, ay, az, worldAccelX, worldAccelY, worldAccelZ);
 
-        // 2. Compute loop timing
-        uint32_t now = micros();
-        float dt = (now - lastIntegrationTime) / 1000000.0f;
-        lastIntegrationTime = now;
-        if (dt <= 0.0f || dt > 0.1f) return; // Fail-safe against loop timing anomalies
+        updateDeadReckoning(worldAccelX, worldAccelY, worldAccelZ);
 
-        // 3. Apply Deadband filtering to isolate ambient structural vibrations
-        const float deadband = 0.08f; // m/s^2 
-        if (abs(worldAccelX) < deadband) worldAccelX = 0.0f;
-        if (abs(worldAccelY) < deadband) worldAccelY = 0.0f;
-        if (abs(worldAccelZ) < deadband) worldAccelZ = 0.0f;
+        // // 2. Compute loop timing
+        // uint32_t now = micros();
+        // float dt = (now - lastIntegrationTime) / 1000000.0f;
+        // lastIntegrationTime = now;
+        // if (dt <= 0.0f || dt > 0.1f) return; // Fail-safe against loop timing anomalies
 
-        // 4. Double Integration Step
-        droneState.velocity.x += worldAccelX * dt;
-        droneState.velocity.y += worldAccelY * dt;
-        droneState.velocity.z += worldAccelZ * dt;
+        // // 3. Apply Deadband filtering to isolate ambient structural vibrations
+        // const float deadband = 0.08f; // m/s^2 
+        // if (abs(worldAccelX) < deadband) worldAccelX = 0.0f;
+        // if (abs(worldAccelY) < deadband) worldAccelY = 0.0f;
+        // if (abs(worldAccelZ) < deadband) worldAccelZ = 0.0f;
 
-        droneState.position.x += droneState.velocity.x * dt;
-        droneState.position.y += droneState.velocity.y * dt;
-        droneState.position.z += droneState.velocity.z * dt;
+        // // 4. Double Integration Step
+        // droneState.velocity.x += worldAccelX * dt;
+        // droneState.velocity.y += worldAccelY * dt;
+        // droneState.velocity.z += worldAccelZ * dt;
 
-        // 5. Apply the Leaky Integrator (Drain accumulation when standing completely still)
-        const float leak = 0.985f;
-        if (worldAccelX == 0.0f) { droneState.velocity.x *= leak; droneState.position.x *= leak; }
-        if (worldAccelY == 0.0f) { droneState.velocity.y *= leak; droneState.position.y *= leak; }
-        if (worldAccelZ == 0.0f) { droneState.velocity.z *= leak; droneState.position.z *= leak; }
+        // droneState.position.x += droneState.velocity.x * dt;
+        // droneState.position.y += droneState.velocity.y * dt;
+        // droneState.position.z += droneState.velocity.z * dt;
+
+        // // 5. Apply the Leaky Integrator (Drain accumulation when standing completely still)
+        // const float leak = 0.985f;
+        // if (worldAccelX == 0.0f) { droneState.velocity.x *= leak; droneState.position.x *= leak; }
+        // if (worldAccelY == 0.0f) { droneState.velocity.y *= leak; droneState.position.y *= leak; }
+        // if (worldAccelZ == 0.0f) { droneState.velocity.z *= leak; droneState.position.z *= leak; }
     } 
 }
 
@@ -158,8 +162,17 @@ float Gyro::getRoll() {
 uint32_t Gyro::lastCheck = 0;
 void Gyro::updateDeadReckoning(float wX, float wY, float wZ) {
     uint32_t now = micros();
+
+    // Skip first loop to get accurate times
+    if (lastCheck == 0) {
+        lastCheck = now;
+        return;
+    }
     float dt = (now - lastCheck) / 1000000.0f;
     lastCheck = now;
+
+    // Fail-safe against loop timing hiccups (don't process if loop stalled)
+    if (dt <= 0.0f || dt > 0.1f) return;
 
     // 1. Dynamic Deadband: Ignore baseline sensor hiss/vibrations
     const float accelNoiseThreshold = 0.08f; // m/s^2
@@ -179,9 +192,9 @@ void Gyro::updateDeadReckoning(float wX, float wY, float wZ) {
     // 3. The Leak: Slowly drain energy so baseline drift doesn't stack to infinity
     // 0.985 means it retains 98.5% of its velocity/position per loop iteration
     const float leakFactor = 0.985f; 
-    if (wX == 0.0f) { droneState.velocity.x *= leakFactor; droneState.position.x *= leakFactor; }
-    if (wY == 0.0f) { droneState.velocity.y *= leakFactor; droneState.position.y *= leakFactor; }
-    if (wZ == 0.0f) { droneState.velocity.z *= leakFactor; droneState.position.z *= leakFactor; }
+    if (wX == 0.0f) { droneState.velocity.x *= leakFactor;}; //droneState.position.x *= leakFactor; }
+    if (wY == 0.0f) { droneState.velocity.y *= leakFactor;}; //droneState.position.y *= leakFactor; }
+    if (wZ == 0.0f) { droneState.velocity.z *= leakFactor;}; //droneState.position.z *= leakFactor; }
 }
 
 
@@ -261,7 +274,7 @@ void Gyro::debug() {
 //   }
 
     if ( debugTimmer > 500 ) {
-        char debugOut[64];
+        char debugOut[128];
 
         switch (report)
         {
