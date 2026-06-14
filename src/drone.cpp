@@ -80,8 +80,8 @@ bool Drone::startup() {
 
 void Drone::update() {
     
-
-
+    Gyro::update();
+    Gyro::debug();
 
     return;
 }

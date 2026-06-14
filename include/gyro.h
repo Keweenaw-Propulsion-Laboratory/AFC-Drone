@@ -15,6 +15,15 @@ class Gyro{
     // Functions
     static bool setup();
     static bool setupComplete();
+
+    static void update();
+
+    static float getPitch();
+    static float getYaw();
+    static float getRoll();
+
+
+    // Helpers
     static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees = false);
     static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees = false);
     static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees = false);
