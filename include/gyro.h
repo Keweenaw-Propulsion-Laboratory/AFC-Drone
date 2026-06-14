@@ -10,7 +10,29 @@ class Gyro{
         float roll;
     };
 
+    struct state_t {
+        double x;
+        double y;
+        double z;
+    };
+
+    struct DroneState{
+        state_t body_accel; // Acceleration in reference to the vehicle
+        state_t norm_accel; // Acceleration normalized to gravity. 
+        state_t velocity; // Velocity normalized to gravity
+        state_t position; // Position
+
+    };
+    
     static euler_t ypr;
+    static DroneState droneState;
+    static uint32_t lastCheck;
+
+    static float worldAccelX;
+    static float worldAccelY;
+    static float worldAccelZ;
+
+    static uint32_t lastIntegrationTime;
 
     // Functions
     static bool setup();
@@ -22,11 +44,15 @@ class Gyro{
     static float getYaw();
     static float getRoll();
 
+    static void updateDeadReckoning(float wX, float wY, float wZ);
 
     // Helpers
     static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees = false);
     static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees = false);
     static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees = false);
+
+    static void transformToWorldFrame(float qW, float qX, float qY, float qZ, float ax, float ay, float az, 
+                           float& worldX, float& worldY, float& worldZ);
 
     static void debug();
 
