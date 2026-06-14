@@ -12,6 +12,7 @@ uint8_t Radio::packetNum = 0; // Set packet number to zero;
 
 Radio::RadioSetupStates Radio::setupState = RESET1;
 
+int retryCounter = 0;
 
 /**
  * Performs setup on the radio module.
@@ -24,6 +25,7 @@ bool Radio::setup() {
 
     // A variable to help with timing during the setup process
     static uint32_t setupTimmer;
+
     switch (setupState) {
         case RadioSetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
@@ -39,12 +41,13 @@ bool Radio::setup() {
         case RadioSetupStates::RESET2 :
             if (millis() > (setupTimmer + 10)){
                 digitalWrite(RFM69_RST, LOW);
-                return false;
             }
 
             if (millis() > setupTimmer + 20){
                 setupState = RADIO_INIT;
+                Debug::println("Radio Reset");
             }
+            return true;
 
             break;
         
@@ -54,6 +57,8 @@ bool Radio::setup() {
                 Debug::println("Radio start failed");
                 return false;
             }
+
+            setupState = SET_CONFIG;
             return true;
             break;
 
@@ -72,7 +77,8 @@ bool Radio::setup() {
                 radio.setTxPower(20, true); // 20 dbm , Enable high power antenna.
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
-
+                
+                setupState = SEND_CONN;
                 return true;
         }
             break;
@@ -81,6 +87,8 @@ bool Radio::setup() {
             setupTimmer = millis(); // Record time of sent connection ping
             uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
             sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+
+            setupState = WAIT_ACK;
             return true;
         
         break;
@@ -94,8 +102,11 @@ bool Radio::setup() {
             // Check if there is an ack waiting
             if (!getMessage(recvBuffer, buffLength)) {
                 // Go back to sending a message if the ack hasnt been received after 1 second
-                if(millis() < setupTimmer + 1000) {
-                    Debug::println("BaseStation not connected. Retrying... ");
+                if(millis() > setupTimmer + 1000) {
+                    setupTimmer = millis();
+                    Debug::print("BaseStation not connected. Retrying... #");
+                    Debug::println(retryCounter++);
+
                     setupState = SEND_CONN;
                 }
                 return true; // Return back to loop
@@ -104,6 +115,8 @@ bool Radio::setup() {
             // Check if correct ack was recieved 
             if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
                 // Update state to complete the radio init
+                Debug::println("BaseStation CONNECTED");
+                
                 setupState = COMPLETE;
                 return true;
             }

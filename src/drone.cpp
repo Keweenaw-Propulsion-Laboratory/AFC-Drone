@@ -6,6 +6,9 @@
 #include "error.h" 
 #include "debug.h"
 
+// Initialize state to BOOT
+Drone::DroneStates Drone::state = Drone::DroneStates::BOOT;
+
 /**
  * Performs the startup sequence
  */
@@ -20,7 +23,7 @@ bool Drone::startup() {
 
         // Check if there is a serial connection.
         // If true then move on with loop
-        if(!Debug::checkSerial()) {return;}
+        if(!Debug::checkSerial()) {return false;}
         
         
         // Transition to next state
@@ -56,6 +59,7 @@ bool Drone::startup() {
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
+            Debug::println("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
             state = DroneStates::READY_ARMED;
         }
 
@@ -65,12 +69,20 @@ bool Drone::startup() {
         break;
     }
 
-    return state == DroneStates::READY_ARMED;
+    if (state == DroneStates::READY_ARMED){
+        Debug::println("Drone ARMED");
+        return true;
+    }
+
+    return false;
 
 }
 
 void Drone::update() {
     
+
+
+
     return;
 }
 

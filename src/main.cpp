@@ -13,6 +13,7 @@
 #define LOOP_STATUS_INTERVAL 2000 // 2000 ms
 
 void setup() {
+
     while (!Drone::startup()) {}
 
 }
