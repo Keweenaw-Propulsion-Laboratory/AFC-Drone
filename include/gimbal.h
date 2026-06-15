@@ -20,21 +20,41 @@ class Gimbal {
 
         static void set(float pitch, float yaw);
 
-        static void setTopServo(float angle);
-        static void setBotServo(float angle);
-
         static void zero();
         static void selfTest();
 
+        static float getPitch() {return pitch;}
+        static float getYaw() {return yaw;}
+
+        static float getTopServo() {return topServo;}
+        static float getBottomServo() {return botServo;}
+
 
     private:
-        static int pitch;
-        static int yaw;
+        static float pitch;
+        static float yaw;
+
+        static float topServo;
+        static float botServo;
 
         static Servo pitchServo;
         static Servo yawServo;
 
         static int limitRange(int val, int low, int high);
+
+        /**
+         * INTERNAL USE ONLY. Manually sets the servo to a point.
+         * 
+         * @warning does not update pitch and yaw set points
+         */
+        static void setTopServo(float angle);
+        
+        /**
+         * INTERNAL USE ONLY. Manually sets the servo to a point.
+         * 
+         * @warning does not update pitch and yaw set points
+         */
+        static void setBotServo(float angle);
 
 
         // MARK: Lookup table for gimbal correction

@@ -19,10 +19,6 @@ void setup() {
 }
 
 void loop() {
-    static uint32_t lastLoopTime = 0; // How long did the last loop take.
-    static uint32_t worstTime = 0; // Keep track of our worst case loop time
-    static uint32_t bestTime = -1; // Keep track of our best case loop time
-
     static uint32_t startTime = micros(); // What time is it currently?
   
     // MARK: Control Loop Logic
@@ -42,8 +38,8 @@ void loop() {
         rollingAverage = (alpha * (float)currentLoopCost) + ((1.0f - alpha) * rollingAverage);
     }
   
-    if (lastLoopTime > worstTime) {worstTime = lastLoopTime;}
-    if (lastLoopTime < bestTime) {bestTime = lastLoopTime;}
+    if (Drone::lastLoopTime > Drone::worstTime) {Drone::worstTime = Drone::lastLoopTime;}
+    if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;}
 
     // Last time that a status message has been sent
     static uint16_t lastStatus = 0;
@@ -52,21 +48,18 @@ void loop() {
     if (millis() - lastStatus > LOOP_STATUS_INTERVAL) {
         static uint8_t statusMessage[8];
 
-        statusMessage[7] = ((bestTime >> 8) & 0xFF); // Upper 8 bits of best time
-        statusMessage[6] = (bestTime & 0xFF); // Lower 8 bits of best time
-        statusMessage[5] = ((worstTime >> 8) & 0xFF); // Upper 8 bits of the worst time
-        statusMessage[4] = (worstTime & 0xFF);
+        statusMessage[7] = ((Drone::bestTime >> 8) & 0xFF); // Upper 8 bits of best time
+        statusMessage[6] = (Drone::bestTime & 0xFF); // Lower 8 bits of best time
+        statusMessage[5] = ((Drone::worstTime >> 8) & 0xFF); // Upper 8 bits of the worst time
+        statusMessage[4] = (Drone::worstTime & 0xFF);
 
-        static uint16_t rollAvgInt;
+        Drone::rollAvg = ((int) rollingAverage * 100); 
 
-        rollAvgInt = ((int) rollingAverage * 100); 
-
-        statusMessage[3] = ((rollAvgInt >> 8) & 0xFF);
-        statusMessage[2] = (rollAvgInt & 0xFF);
-        statusMessage[1] = ((lastLoopTime >> 8) & 0xFF);
-        statusMessage[0] = (lastLoopTime & 0xFF);
+        statusMessage[3] = ((Drone::rollAvg >> 8) & 0xFF);
+        statusMessage[2] = (Drone::rollAvg & 0xFF);
+        statusMessage[1] = ((Drone::lastLoopTime >> 8) & 0xFF);
+        statusMessage[0] = (Drone::lastLoopTime & 0xFF);
         
-        Radio::sendMessage(statusMessage, 8, Radio::MessageType::LOOPTIMES );
     } 
 
     while(micros() - startTime < LOOPTIME) ; // Wait until the looptime has elapsed 

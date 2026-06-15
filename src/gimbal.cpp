@@ -17,6 +17,10 @@ void Gimbal::setup() {
 
 void Gimbal::set(float pitch, float yaw) {
 
+    // Update set points
+    Gimbal::pitch = pitch;
+    Gimbal::yaw = yaw;
+
     // Bilinear Interpolation
     // https://en.wikipedia.org/wiki/Bilinear_interpolation
 
@@ -81,7 +85,9 @@ void Gimbal::set(float pitch, float yaw) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setTopServo(float angle) {
-    pitchServo.write(limitRange(angle + PITCH_ZERO, 60 , 120));   
+    topServo = limitRange(angle + PITCH_ZERO, 60 , 120);
+
+    pitchServo.write(topServo);   
 }
 
 /**
@@ -90,15 +96,16 @@ void Gimbal::setTopServo(float angle) {
  * @param yaw The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setBotServo(float angle) {
-    yawServo.write(limitRange( -angle + YAW_ZERO, 60, 120));
+    botServo = limitRange( -angle + YAW_ZERO, 60, 120);
+    yawServo.write(botServo);
 }
 
 
 
 void Gimbal::zero() {
     // Setting the servos to their mid point
-    pitchServo.write(90);
-    yawServo.write(90);
+    set(0,0);
+    
 }
 
 void Gimbal::selfTest() {

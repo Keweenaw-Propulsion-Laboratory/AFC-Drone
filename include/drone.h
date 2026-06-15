@@ -3,7 +3,7 @@
 
 class Drone {
     public:
-    enum class DroneStates {
+    enum class DroneStates: uint8_t {
         BOOT, 
         RADIO_SETUP,  
         SENSOR_SETUP,
@@ -27,10 +27,15 @@ class Drone {
      */
     static void update();
 
+        static uint16_t lastLoopTime; // How long did the last loop take.
+        static uint16_t worstTime; // Keep track of our worst case loop time
+        static uint16_t bestTime; // Keep track of our best case loop time
+        static uint16_t rollAvg;
+        static DroneStates state; // The current state of the Drone
 
     private:
-        static DroneStates state; // The current state of the Drone
         static bool hasSerial; // Is there a USB Serial connection to debug with
+
 
         static void updateLEDS();
         static void ledFader();

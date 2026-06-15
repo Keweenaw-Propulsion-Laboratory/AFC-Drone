@@ -3,10 +3,14 @@
 
 #include "error.h"
 #include "debug.h"
+#include "drone.h"
+#include "gimbal.h"
+#include "gyro.h"
 
 // Initialize static variables
 RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
-uint8_t Radio::packetNum = 0; // Set packet number to zero;
+uint8_t Radio::globalPacketNum = 0; // Set packet number to zero;
+int16_t Radio::lastRssi = 0;
 
 
 
@@ -86,7 +90,7 @@ bool Radio::setup() {
         case RadioSetupStates::SEND_CONN : {
             setupTimmer = millis(); // Record time of sent connection ping
             uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
-            sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+            // sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
 
             setupState = WAIT_ACK;
             return true;
@@ -138,24 +142,120 @@ bool Radio::setupComplete() {
 
 
 void Radio::update() {
+
+    // Only run radio if setup has been completed. 
+    if (setupComplete()) {
+
+        // Check if radio has available packets
+        if (radio.available()) {
+            uint8_t buffer[RH_RF69_MAX_MESSAGE_LEN];
+            uint8_t len = sizeof(buffer);
+
+            if( radio.recv(buffer, &len) ) { // Get message from radio
+                // Determine message type
+
+                uint8_t currentPacketNum = radio.headerId();
+                uint8_t messageType = radio.headerFlags();
+
+                // TODO implement packet counting and error checking
+                if (currentPacketNum != globalPacketNum + 1){
+
+                }
+
+
+                switch ( static_cast<MessageType>(messageType) )
+                {
+                case MessageType::SETUP :
+                    // TODO
+                    break;
+
+                case MessageType::COMMAND :
+                    // TODO
+
+
+                    break;
+                default:
+                    break;
+                }
+
+            }
+
+        }
+
+        // Send any messages in the outgoing buffer
+
+
+    }
+}
+
+void Radio::sendStatus0() {
+    StatusMsg0_t message;
+
+    message.loopTimeAvg = Drone::rollAvg;
+    message.loopTimeMax = Drone::worstTime;
+    message.RunTime = millis() / 1000;
+    message.rssi = lastRssi;
+    message.currentMode = (uint8_t) Drone::state;
+
+    sendMessage(message, MessageType::STATUS0);
+}
+
+void Radio::sendStatus1() {
+    StatusMsg1_t message;
+
+    message.gimbalPitchNorm = Gimbal::getPitch();
+    message.gimbalYawNorm = Gimbal::getYaw();
+    message.topServoSet = Gimbal::getTopServo();
+    message.bottomServoSet = Gimbal::getBottomServo();
+
+    sendMessage(message, MessageType::STATUS1);
+}
+
+void Radio::sendStatus2() {
+    StatusMsg2_t message;
+
+
+
+}
+
+void Radio::sendStatus3() {
+    StatusMsg3_t message;
+
     
 
+}
+
+void Radio::sendStatus4() {
+    StatusMsg4_t message;
+
+    
+
+}
+
+void Radio::sendStatus5() {
+    StatusMsg5_t message;
+
+    
+
+}
+
+void Radio::sendStatus6() {
+    StatusMsg6_t message;
+
+    
 
 }
 
 
 
+// void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
+//     radio.waitPacketSent(); // Wait for any previous packet to be sent
 
+//     radio.setHeaderId(packetNum); // Set the packet Id to the current packet number
+//     radio.setHeaderFlags(type); // Set the flags to the type of message.
 
-
-void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
-    radio.waitPacketSent(); // Wait for any previous packet to be sent
-
-    radio.setHeaderId(packetNum); // Set the packet Id to the current packet number
-    radio.setHeaderFlags(type); // Set the flags to the type of message.
-
-    radio.send(data, dataSize); // Send the data
-}
+//     radio.send(data, dataSize); // Send the data
+// }
 
 /**
  * @return Will return true when there is a message. 
