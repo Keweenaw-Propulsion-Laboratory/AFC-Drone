@@ -28,21 +28,6 @@ class Radio {
         static bool setup();
         static bool setupComplete();
 
-
-        // MARK: Message structure
-        enum class MessageType : uint8_t {
-            SETUP = 0,
-            STATUS0 = 1,
-            STATUS1 = 2,
-            STATUS2 = 3,
-            STATUS3 = 4,
-            STATUS4 = 5,
-            STATUS5 = 6,
-            STATUS6 = 7,
-            COMMAND = 8
-
-        };
-
         enum class RadioStates : uint8_t{
             HARDWARE_INIT,
             TRANSMIT,
@@ -109,15 +94,21 @@ class Radio {
             float longitude;
         };
 
+        
+
         struct __attribute__((packed)) Command_t {
-            uint8_t flags;
-            int8_t targetPosX;
-            int8_t targetPosY;
-            int8_t targetPosZ;
-            uint8_t targetRoll;
-            uint8_t empty0; // Unused command fields
-            uint8_t empty1;
-            uint8_t empty2;
+            struct __attribute__((packed)) flags {
+                uint8_t targSlot : 1; /**The slot to be configured */
+                uint8_t activeSlot : 1; /** The slot to be currently active */
+                uint8_t empty : 6; // 6 Unused flags
+            } flags;
+            int8_t gimbalX;
+            int8_t gimbalY;
+            uint16_t targetRoll;
+            uint8_t motor0Speed;
+            uint8_t motor1Speed;
+            uint8_t empty0; // Unused command field
+
         };
 
         // uinion all of the radio messages for type safety
@@ -134,10 +125,24 @@ class Radio {
             char textArray[8];
             
         };
-
+    
         // Ensure that all messages are 8 bytes
         static_assert(sizeof(RadioMessage) == sizeof(uint64_t), "Radio messages must be 8 bytes");
+        
+        // MARK: Message structure
+        enum class MessageType : uint8_t {
+            SETUP = 0,
+            STATUS0 = 1,
+            STATUS1 = 2,
+            STATUS2 = 3,
+            STATUS3 = 4,
+            STATUS4 = 5,
+            STATUS5 = 6,
+            STATUS6 = 7,
+            COMMAND = 8,
+            CONFIG = 9,
 
+        };
 
 
         static void sendStatus0();

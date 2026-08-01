@@ -14,6 +14,11 @@ uint16_t Drone::lastLoopTime = 0;
 uint16_t Drone::worstTime = 0;
 uint16_t Drone::bestTime = -1;
 
+Target_t drone_targ0, drone_targ1;
+
+bool drone_activeSlot = 0;
+
+
 /**
  * Performs the startup sequence
  */

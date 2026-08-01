@@ -35,12 +35,16 @@ struct __attribute__((packed)) RadioPacket {
 static Circular_Buffer<RadioPacket, 16> radio_tx_buffer; // 16 message tx buffer
 static Circular_Buffer<RadioPacket, 16> radio_rx_buffer; // 16 message rx buffer
 
-
-
 Radio::RadioSetupStates setupState = Radio::RadioSetupStates::RESET1;
 
 int retryCounter = 0;
 
+void radio_handleCommand(Radio::RadioMessage msg);
+void radio_handleConfig(Radio:: RadioMessage msg);
+void radio_handleSetup(Radio::RadioMessage msg);
+
+
+// MARK: Setup
 /**
  * Performs setup on the radio module.
  * 
@@ -166,7 +170,7 @@ bool Radio::setupComplete() {
     return setupState == RadioSetupStates::COMPLETE;
 }
 
-
+// MARK: Periodic Update
 void Radio::update() {
     // Get current time;
     uint32_t now = millis();
@@ -180,8 +184,7 @@ void Radio::update() {
             uint8_t len = sizeof(buffer);
 
             if( radio.recv(buffer, &len) ) { // Get message from radio
-                // Determine message type
-
+                // Save the headers
                 uint8_t currentPacketNum = radio.headerId();
                 uint8_t messageType = radio.headerFlags();
 
@@ -190,21 +193,38 @@ void Radio::update() {
 
                 }
 
+                // Copy the data from the message
+                header_t header = {currentPacketNum, messageType};
+                RadioMessage msg;
+                memcpy(&msg, buffer + sizeof(header_t), sizeof(RadioMessage));
 
-                switch ( static_cast<MessageType>(messageType) )
+                switch (static_cast<MessageType>(header.packetType))
                 {
                 case MessageType::SETUP :
-                    // TODO
+                    /* code */
                     break;
-
+                
                 case MessageType::COMMAND :
-                    // TODO
-
-
+                    radio_handleCommand(msg);
                     break;
+
+                case MessageType::CONFIG :
+                
                 default:
                     break;
                 }
+
+
+
+
+
+
+                // // Convert to a RadioPacket
+                // RadioPacket packet = { msg, static_cast<MessageType>(header.packetType)};
+
+                // // Save to rx buffer
+                // radio_rx_buffer.push_back(packet);
+
 
             }
 
@@ -245,6 +265,7 @@ void Radio::sendMessage(RadioMessage data, MessageType type) {
     radio_tx_buffer.push_back({data, type});
 }
 
+// MARK: Status Senders
 
 void Radio::sendStatus0() {
     RadioMessage msg;
@@ -304,21 +325,44 @@ void Radio::sendStatus6() {
 
 }
 
+// MARK: Message Handlers
+
+void radio_handleCommand(Radio::RadioMessage msg) {
+
+// Sets a target position
+    if (msg.command.flags.targSlot == 0) {
+        drone_targ0.gimbalX = msg.command.gimbalX;
+        drone_targ0.gimbalY = msg.command.gimbalY;
+        drone_targ0.targetRoll = msg.command.targetRoll;
+        drone_targ0.motor0Speed = msg.command.motor0Speed;
+        drone_targ0.motor1Speed = msg.command.motor1Speed;
+    } else {
+        drone_targ1.gimbalX = msg.command.gimbalX;
+        drone_targ1.gimbalY = msg.command.gimbalY;
+        drone_targ1.targetRoll = msg.command.targetRoll;
+        drone_targ1.motor0Speed = msg.command.motor0Speed;
+        drone_targ1.motor1Speed = msg.command.motor1Speed;
+    }
+
+    drone_activeSlot = msg.command.flags.activeSlot;
 
 
-// void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
-//     radio.waitPacketSent(); // Wait for any previous packet to be sent
 
-//     radio.setHeaderId(packetNum); // Set the packet Id to the current packet number
-//     radio.setHeaderFlags(type); // Set the flags to the type of message.
 
-//     radio.send(data, dataSize); // Send the data
-// }
+}
 
-/**
- * @return Will return true when there is a message. 
- * Will return false if there is no message available.
- */
+void radio_handleConfig(Radio::RadioMessage msg) {
+
+
+}
+
+void radio_handleSetup(Radio::RadioMessage msg) {
+
+
+}
+
+// MARK: Radio helpers
+
 bool Radio::getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                         , uint8_t& bufferLength ) {
 

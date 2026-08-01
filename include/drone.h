@@ -1,6 +1,18 @@
 #define STATUS_LED 10
 #include <cstdint>
 
+typedef struct {
+    int8_t gimbalX;
+    int8_t gimbalY;
+    uint16_t targetRoll;
+    uint8_t motor0Speed;
+    uint8_t motor1Speed;
+} Target_t;
+
+extern Target_t drone_targ0;
+extern Target_t drone_targ1;
+extern bool drone_activeSlot;
+
 class Drone {
     public:
     enum class DroneStates: uint8_t {
