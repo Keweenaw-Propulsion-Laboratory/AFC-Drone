@@ -1,5 +1,5 @@
 #define STATUS_LED 10
-
+#include <cstdint>
 
 class Drone {
     public:

@@ -10,9 +10,9 @@
 Drone::DroneStates Drone::state = Drone::DroneStates::BOOT;
 
 // Initialize loop timers
-uint32_t Drone::lastLoopTime = 0;
-uint32_t Drone::worstTime = 0;
-uint32_t Drone::bestTime = -1;
+uint16_t Drone::lastLoopTime = 0;
+uint16_t Drone::worstTime = 0;
+uint16_t Drone::bestTime = -1;
 
 /**
  * Performs the startup sequence

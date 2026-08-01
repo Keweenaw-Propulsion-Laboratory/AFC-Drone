@@ -39,28 +39,7 @@ void loop() {
     }
   
     if (Drone::lastLoopTime > Drone::worstTime) {Drone::worstTime = Drone::lastLoopTime;}
-    if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;}
-
-    // Last time that a status message has been sent
-    static uint16_t lastStatus = 0;
-    
-    // Send a status message every LOOP_STATUS_INTERVAL
-    if (millis() - lastStatus > LOOP_STATUS_INTERVAL) {
-        static uint8_t statusMessage[8];
-
-        statusMessage[7] = ((Drone::bestTime >> 8) & 0xFF); // Upper 8 bits of best time
-        statusMessage[6] = (Drone::bestTime & 0xFF); // Lower 8 bits of best time
-        statusMessage[5] = ((Drone::worstTime >> 8) & 0xFF); // Upper 8 bits of the worst time
-        statusMessage[4] = (Drone::worstTime & 0xFF);
-
-        Drone::rollAvg = ((int) rollingAverage * 100); 
-
-        statusMessage[3] = ((Drone::rollAvg >> 8) & 0xFF);
-        statusMessage[2] = (Drone::rollAvg & 0xFF);
-        statusMessage[1] = ((Drone::lastLoopTime >> 8) & 0xFF);
-        statusMessage[0] = (Drone::lastLoopTime & 0xFF);
-        
-    } 
+    if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;} 
 
     while(micros() - startTime < LOOPTIME) ; // Wait until the looptime has elapsed 
 }

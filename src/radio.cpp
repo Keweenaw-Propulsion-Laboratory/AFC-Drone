@@ -1,5 +1,7 @@
 #include "radio.h"
 #include "Arduino.h"
+#include <cstring>
+#include "circular_buffer.h"
 
 #include "error.h"
 #include "debug.h"
@@ -7,14 +9,35 @@
 #include "gimbal.h"
 #include "gyro.h"
 
+/**Minimum time to wait in ms between transmissions */
+constexpr uint32_t RX_WINDOW_MIN = 10;
+
 // Initialize static variables
-RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
-uint8_t Radio::globalPacketNum = 0; // Set packet number to zero;
-int16_t Radio::lastRssi = 0;
+RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
+uint8_t globalPacketNum = 0; // Set packet number to zero;
+int16_t lastRssi = 0;
+uint32_t lastTxTime = 0; /** Last transmission time */
+
+
+struct __attribute__((packed)) RadioPacket {
+    Radio::RadioMessage message;
+    Radio::MessageType type;
+
+    // 1. Constructor allowing implicit conversion from '0' (fixes the Circular_Buffer fallback)
+    RadioPacket(int = 0) 
+        : message{0}, type(Radio::MessageType::SETUP) {}
+
+    // 2. Multi-argument constructor for initializing packets cleanly
+    RadioPacket(Radio::RadioMessage msg, Radio::MessageType t) 
+        : message(msg), type(t) {}
+};
+
+static Circular_Buffer<RadioPacket, 16> radio_tx_buffer; // 16 message tx buffer
+static Circular_Buffer<RadioPacket, 16> radio_rx_buffer; // 16 message rx buffer
 
 
 
-Radio::RadioSetupStates Radio::setupState = RESET1;
+Radio::RadioSetupStates setupState = Radio::RadioSetupStates::RESET1;
 
 int retryCounter = 0;
 
@@ -38,7 +61,7 @@ bool Radio::setup() {
 
                 setupTimmer = millis();
 
-                setupState = RESET2;
+                setupState = RadioSetupStates::RESET2;
                 return true;
             break;
         
@@ -48,7 +71,7 @@ bool Radio::setup() {
             }
 
             if (millis() > setupTimmer + 20){
-                setupState = RADIO_INIT;
+                setupState = RadioSetupStates::RADIO_INIT;
                 Debug::println("Radio Reset");
             }
             return true;
@@ -62,7 +85,7 @@ bool Radio::setup() {
                 return false;
             }
 
-            setupState = SET_CONFIG;
+            setupState = RadioSetupStates::SET_CONFIG;
             return true;
             break;
 
@@ -82,17 +105,20 @@ bool Radio::setup() {
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
                 
-                setupState = SEND_CONN;
+                setupState = RadioSetupStates::SEND_CONN;
                 return true;
         }
             break;
         
         case RadioSetupStates::SEND_CONN : {
             setupTimmer = millis(); // Record time of sent connection ping
-            uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
-            // sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+            
+            RadioMessage conn;
+            memcpy(conn.textArray, "AFCDrone", 8);
 
-            setupState = WAIT_ACK;
+            sendMessage(conn, MessageType::SETUP);
+            
+            setupState = RadioSetupStates::WAIT_ACK;
             return true;
         
         break;
@@ -111,7 +137,7 @@ bool Radio::setup() {
                     Debug::print("BaseStation not connected. Retrying... #");
                     Debug::println(retryCounter++);
 
-                    setupState = SEND_CONN;
+                    setupState = RadioSetupStates::SEND_CONN;
                 }
                 return true; // Return back to loop
             }
@@ -121,7 +147,7 @@ bool Radio::setup() {
                 // Update state to complete the radio init
                 Debug::println("BaseStation CONNECTED");
                 
-                setupState = COMPLETE;
+                setupState = RadioSetupStates::COMPLETE;
                 return true;
             }
             // Return to loop
@@ -137,11 +163,13 @@ bool Radio::setup() {
 }
 
 bool Radio::setupComplete() {
-    return setupState == COMPLETE;
+    return setupState == RadioSetupStates::COMPLETE;
 }
 
 
 void Radio::update() {
+    // Get current time;
+    uint32_t now = millis();
 
     // Only run radio if setup has been completed. 
     if (setupComplete()) {
@@ -182,65 +210,95 @@ void Radio::update() {
 
         }
 
+        // Check if radio is busy. If yes wait
+        if (radio.mode() == RHGenericDriver::RHModeTx) return;
+
+        // Check if listen window has been open long enough
+        if (now - lastTxTime < RX_WINDOW_MIN) {
+            if (radio.mode() != RHGenericDriver::RHModeRx) {
+                radio.setModeRx();
+            }
+            return;
+        }
+
         // Send any messages in the outgoing buffer
+        RadioPacket packet;
+        if (radio_tx_buffer.size() != 0) {
+            packet = radio_tx_buffer.pop_front();
+
+            header_t header{ globalPacketNum++, static_cast<uint8_t>(packet.type) };
+
+            uint8_t frame[sizeof(header_t) + sizeof(RadioMessage)];
+            memcpy(frame, &header, sizeof(header_t));
+            memcpy(frame + sizeof(header_t), &packet.message, sizeof(RadioMessage));
+
+            radio.send(frame, sizeof(frame)); // Non-blocking transmit start
+            lastTxTime = now;
+        }
 
 
     }
 }
 
+/** Adds message to radio queue */
+void Radio::sendMessage(RadioMessage data, MessageType type) {
+    radio_tx_buffer.push_back({data, type});
+}
+
+
 void Radio::sendStatus0() {
-    StatusMsg0_t message;
+    RadioMessage msg;
 
-    message.loopTimeAvg = Drone::rollAvg;
-    message.loopTimeMax = Drone::worstTime;
-    message.RunTime = millis() / 1000;
-    message.rssi = lastRssi;
-    message.currentMode = (uint8_t) Drone::state;
+    msg.status0.loopTimeAvg = Drone::rollAvg;
+    msg.status0.loopTimeMax = Drone::worstTime;
+    msg.status0.RunTime = millis() / 1000;
+    msg.status0.rssi = lastRssi;
+    msg.status0.currentMode = (uint8_t) Drone::state;
 
-    sendMessage(message, MessageType::STATUS0);
+    sendMessage( msg, MessageType::STATUS0);
 }
 
 void Radio::sendStatus1() {
-    StatusMsg1_t message;
+    RadioMessage msg;
 
-    message.gimbalPitchNorm = Gimbal::getPitch();
-    message.gimbalYawNorm = Gimbal::getYaw();
-    message.topServoSet = Gimbal::getTopServo();
-    message.bottomServoSet = Gimbal::getBottomServo();
+    msg.status1.gimbalPitchNorm = Gimbal::getPitch();
+    msg.status1.gimbalYawNorm = Gimbal::getYaw();
+    msg.status1.topServoSet = Gimbal::getTopServo();
+    msg.status1.bottomServoSet = Gimbal::getBottomServo();
 
-    sendMessage(message, MessageType::STATUS1);
+    sendMessage(msg, MessageType::STATUS1);
 }
 
 void Radio::sendStatus2() {
-    StatusMsg2_t message;
+[[maybe_unused]]    RadioMessage msg;
 
 
 
 }
 
 void Radio::sendStatus3() {
-    StatusMsg3_t message;
+[[maybe_unused]]    RadioMessage msg;
 
     
 
 }
 
 void Radio::sendStatus4() {
-    StatusMsg4_t message;
+[[maybe_unused]]    RadioMessage msg;
 
     
 
 }
 
 void Radio::sendStatus5() {
-    StatusMsg5_t message;
+[[maybe_unused]]    RadioMessage msg;
 
     
 
 }
 
 void Radio::sendStatus6() {
-    StatusMsg6_t message;
+[[maybe_unused]]    RadioMessage msg;
 
     
 
