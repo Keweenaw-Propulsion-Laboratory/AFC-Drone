@@ -5,6 +5,7 @@
 #include "gimbal.h"
 #include "error.h" 
 #include "debug.h"
+#include "motor.h"
 
 // Initialize state to BOOT
 Drone::DroneStates Drone::state = Drone::DroneStates::BOOT;
@@ -175,4 +176,23 @@ const uint32_t cycleDuration = 1200; // Total duration of the pattern in ms
             digitalWrite(LED_BUILTIN, LOW);
         }
         
+}
+
+// MARK: Periodic
+
+Target_t* targPointer = &drone_targ0;
+
+void drone_update() {
+
+    if (drone_activeSlot) {
+        targPointer = &drone_targ0;
+    } else {
+        targPointer = &drone_targ1;
+    }
+
+    // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
+    Gimbal::set(targPointer->gimbalX / 1638.0f, targPointer->gimbalY / 1368.0f);
+
+    motor_setMotor(targPointer->motor0Speed, targPointer->motor1Speed);
+
 }

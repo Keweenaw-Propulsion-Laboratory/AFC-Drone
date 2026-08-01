@@ -2,8 +2,8 @@
 #include <cstdint>
 
 typedef struct {
-    int8_t gimbalX;
-    int8_t gimbalY;
+    int16_t gimbalX;
+    int16_t gimbalY;
     uint16_t targetRoll;
     uint8_t motor0Speed;
     uint8_t motor1Speed;

@@ -333,13 +333,11 @@ void radio_handleCommand(Radio::RadioMessage msg) {
     if (msg.command.flags.targSlot == 0) {
         drone_targ0.gimbalX = msg.command.gimbalX;
         drone_targ0.gimbalY = msg.command.gimbalY;
-        drone_targ0.targetRoll = msg.command.targetRoll;
         drone_targ0.motor0Speed = msg.command.motor0Speed;
         drone_targ0.motor1Speed = msg.command.motor1Speed;
     } else {
         drone_targ1.gimbalX = msg.command.gimbalX;
         drone_targ1.gimbalY = msg.command.gimbalY;
-        drone_targ1.targetRoll = msg.command.targetRoll;
         drone_targ1.motor0Speed = msg.command.motor0Speed;
         drone_targ1.motor1Speed = msg.command.motor1Speed;
     }

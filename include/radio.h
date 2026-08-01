@@ -102,9 +102,8 @@ class Radio {
                 uint8_t activeSlot : 1; /** The slot to be currently active */
                 uint8_t empty : 6; // 6 Unused flags
             } flags;
-            int8_t gimbalX;
-            int8_t gimbalY;
-            uint16_t targetRoll;
+            int16_t gimbalX;
+            int16_t gimbalY;
             uint8_t motor0Speed;
             uint8_t motor1Speed;
             uint8_t empty0; // Unused command field
