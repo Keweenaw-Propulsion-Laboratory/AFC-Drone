@@ -1,3 +1,4 @@
+#include <cstdint>
 
 extern uint8_t motor_topSetSpeed;
 extern uint8_t motor_bottomSetSpeed;

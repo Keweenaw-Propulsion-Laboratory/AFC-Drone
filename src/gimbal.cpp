@@ -9,6 +9,14 @@
 Servo Gimbal::pitchServo;
 Servo Gimbal::yawServo;
 
+float gimbal_botServo = 0.0f;
+float gimbal_topServo = 0.0f;
+
+float gimbal_pitch = 0.0f;
+float gimbal_yaw = 0.0f;
+
+
+
 
 void Gimbal::setup() {
     pitchServo.attach(PITCH_SERVO_PIN);
@@ -18,8 +26,8 @@ void Gimbal::setup() {
 void Gimbal::set(float pitch, float yaw) {
 
     // Update set points
-    Gimbal::pitch = pitch;
-    Gimbal::yaw = yaw;
+    gimbal_pitch = pitch;
+    gimbal_yaw = yaw;
 
     // Bilinear Interpolation
     // https://en.wikipedia.org/wiki/Bilinear_interpolation
@@ -69,7 +77,7 @@ void Gimbal::set(float pitch, float yaw) {
     // Resulting top servo setpoint
     float bottomServo = topInterp + y_frac * (bottomInterp - topInterp);
     
-    Serial.printf("Top %f \nBot %f ", topServo, bottomServo);
+    // Serial.printf("Top %f \nBot %f ", topServo, bottomServo);
 
     // Set servos
     setTopServo(topServo);
@@ -85,19 +93,19 @@ void Gimbal::set(float pitch, float yaw) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setTopServo(float angle) {
-    topServo = limitRange(angle + PITCH_ZERO, 60 , 120);
+    gimbal_topServo = limitRange(angle + PITCH_ZERO, 60 , 120);
 
-    pitchServo.write(topServo);   
+    pitchServo.write(gimbal_topServo);   
 }
 
 /**
  * Sets the yaw servo to the number of degrees off of zero.
  * 
- * @param yaw The number of degrees. Positive moves servo throw arm up.
+ * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setBotServo(float angle) {
-    botServo = limitRange( -angle + YAW_ZERO, 60, 120);
-    yawServo.write(botServo);
+    gimbal_botServo = limitRange( -angle + YAW_ZERO, 60, 120);
+    yawServo.write(gimbal_botServo);
 }
 
 

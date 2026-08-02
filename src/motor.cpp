@@ -1,26 +1,40 @@
 #include "motor.h"
 #include "Arduino.h"
+#include "Servo.h"
 
-static constexpr int bottomMotor = 4;
-static constexpr int topMotor = 5;
+static constexpr int bottomMotorPin = 29;
+static constexpr int topMotorPin = 28;
+
+static constexpr int ESC_MIN_US = 1000;
+static constexpr int ESC_MAX_US = 2000;
+
+static Servo topMotor;
+static Servo bottomMotor;
 
 uint8_t motor_bottomSetSpeed = 0;
 uint8_t motor_topSetSpeed = 0;
 
 void motor_setup() {
-    pinMode(bottomMotor, OUTPUT);
-    pinMode(topMotor, OUTPUT);
+    bottomMotor.attach(bottomMotorPin);
+    topMotor.attach(topMotorPin);
 
-    analogWriteFrequency(bottomMotor, 20000);
-    analogWriteFrequency(topMotor, 20000);
-
-    analogWriteResolution(8);
+    // Zero out the controls
+    bottomMotor.writeMicroseconds(ESC_MIN_US); 
+    topMotor.writeMicroseconds(ESC_MIN_US);
 }
 
 void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
-    if (bottomMotorSpeed == motor_bottomSetSpeed && topMotorSpeed == motor_topSetSpeed) return; // Skip if speed is already set.
-    analogWrite(bottomMotor, bottomMotorSpeed);
-    analogWrite(topMotor, topMotorSpeed);
-    motor_bottomSetSpeed = bottomMotorSpeed;
+    uint16_t bottomSpeed =
+        ESC_MIN_US +
+        ((uint32_t)bottomMotorSpeed * (ESC_MAX_US - ESC_MIN_US)) / 255;
+
+    uint16_t topSpeed =
+        ESC_MIN_US +
+        ((uint32_t) topMotorSpeed * (ESC_MAX_US - ESC_MIN_US)) / 255;
+
     motor_topSetSpeed = topMotorSpeed;
+    motor_bottomSetSpeed = bottomMotorSpeed;
+
+    bottomMotor.writeMicroseconds(bottomSpeed);
+    topMotor.writeMicroseconds(topSpeed);
 }

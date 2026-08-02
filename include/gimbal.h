@@ -13,6 +13,12 @@
 #define YAW_COLS 9
 
 
+extern float gimbal_topServo;
+extern float gimbal_botServo;
+extern float gimbal_pitch;
+extern float gimbal_yaw;
+
+
 
 class Gimbal {
     public: 
@@ -26,16 +32,10 @@ class Gimbal {
         static float getPitch() {return pitch;}
         static float getYaw() {return yaw;}
 
-        static float getTopServo() {return topServo;}
-        static float getBottomServo() {return botServo;}
-
-
     private:
         static float pitch;
         static float yaw;
 
-        static float topServo;
-        static float botServo;
 
         static Servo pitchServo;
         static Servo yawServo;

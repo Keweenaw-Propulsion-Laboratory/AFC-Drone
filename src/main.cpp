@@ -4,6 +4,7 @@
 #include "gimbal.h"
 #include "radio.h"
 #include "gyro.h"
+#include "usb.h"
 
 #define onboard 13
 
@@ -19,14 +20,18 @@ void setup() {
 }
 
 void loop() {
-    static uint32_t startTime = micros(); // What time is it currently?
+    const uint32_t startTime = micros();
   
     // MARK: Control Loop Logic
     Drone::update(); // Perform flight logic
 
     // End of Control Loop Logic
 
-    static uint32_t currentLoopCost = micros() - startTime; // How long did the loop take
+    radio_update();
+    usb_update();
+
+
+    const uint32_t currentLoopCost = micros() - startTime;
 
     static float rollingAverage = 0.0f;
     // Alpha controls smoothing. 0.01 means the average changes smoothly over ~100 loops.
@@ -38,8 +43,10 @@ void loop() {
         rollingAverage = (alpha * (float)currentLoopCost) + ((1.0f - alpha) * rollingAverage);
     }
   
+    Drone::lastLoopTime = static_cast<uint16_t>(currentLoopCost);
+    drone_rollAvg = static_cast<uint16_t>(rollingAverage);
     if (Drone::lastLoopTime > Drone::worstTime) {Drone::worstTime = Drone::lastLoopTime;}
-    if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;} 
+    if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;}
 
     while(micros() - startTime < LOOPTIME) ; // Wait until the looptime has elapsed 
 }

@@ -4,50 +4,45 @@
 #include "circular_buffer.h"
 
 #include "error.h"
-#include "debug.h"
 #include "drone.h"
 #include "gimbal.h"
 #include "gyro.h"
+#include "usb.h"
 
 /** Bool value to skip radio handshake
  * This should only be used for testing
  * and debugging.
  */
-constexpr bool SKIP_HANDSHAKE = true;
+static constexpr bool SKIP_HANDSHAKE = true;
+
+/**
+ * Any radio packet sent out will also be mirrored over USB.
+ */
+static constexpr bool USB_RELAY = true;
 
 /**Minimum time to wait in ms between transmissions */
 constexpr uint32_t RX_WINDOW_MIN = 10;
 
 // Initialize static variables
 RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
-uint8_t globalPacketNum = 0; // Set packet number to zero;
-int16_t lastRssi = 0;
+uint8_t radioPacketNum = 0; // Set packet number to zero;
+int16_t radio_lastRssi = 0;
 uint32_t lastTxTime = 0; /** Last transmission time */
 
 
-struct __attribute__((packed)) RadioPacket {
-    Radio::RadioMessage message;
-    Radio::MessageType type;
+static Circular_Buffer<radio_Packet, 16> radio_tx_buffer; // 16 message tx buffer
+static Circular_Buffer<radio_Packet, 16> radio_rx_buffer; // 16 message rx buffer
 
-    // 1. Constructor allowing implicit conversion from '0' (fixes the Circular_Buffer fallback)
-    RadioPacket(int = 0) 
-        : message{0}, type(Radio::MessageType::SETUP) {}
-
-    // 2. Multi-argument constructor for initializing packets cleanly
-    RadioPacket(Radio::RadioMessage msg, Radio::MessageType t) 
-        : message(msg), type(t) {}
-};
-
-static Circular_Buffer<RadioPacket, 16> radio_tx_buffer; // 16 message tx buffer
-static Circular_Buffer<RadioPacket, 16> radio_rx_buffer; // 16 message rx buffer
-
-Radio::RadioSetupStates setupState = Radio::RadioSetupStates::RESET1;
+radio_SetupStates setupState = radio_SetupStates::RESET1;
 
 int retryCounter = 0;
 
-void radio_handleCommand(Radio::RadioMessage msg);
-void radio_handleConfig(Radio:: RadioMessage msg);
-void radio_handleSetup(Radio::RadioMessage msg);
+void radio_handleCommand(radio_Message msg);
+void radio_handleConfig(radio_Message msg);
+void radio_handleSetup(radio_Message msg);
+
+/** Adds message to radio queue */
+void radio_sendMessage(radio_Message data, radio_MessageType type);
 
 
 // MARK: Setup
@@ -58,51 +53,51 @@ void radio_handleSetup(Radio::RadioMessage msg);
  * Will return false if an error occured. All errors should
  * be treated as fatal
  */
-bool Radio::setup() {
+bool radio_setup() {
 
     // A variable to help with timing during the setup process
     static uint32_t setupTimmer;
 
     switch (setupState) {
-        case RadioSetupStates::RESET1 :
+        case radio_SetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
                 // Run reset sequence
                 digitalWrite(RFM69_RST, HIGH);
 
                 setupTimmer = millis();
 
-                setupState = RadioSetupStates::RESET2;
+                setupState = radio_SetupStates::RESET2;
                 return true;
             break;
         
-        case RadioSetupStates::RESET2 :
+        case radio_SetupStates::RESET2 :
             if (millis() > (setupTimmer + 10)){
                 digitalWrite(RFM69_RST, LOW);
             }
 
             if (millis() > setupTimmer + 20){
-                setupState = RadioSetupStates::RADIO_INIT;
-                Debug::println("Radio Reset");
+                setupState = radio_SetupStates::RADIO_INIT;
+                usb_send_text("Radio Reset", 11);
             }
             return true;
 
             break;
         
-        case RadioSetupStates::RADIO_INIT :
+        case radio_SetupStates::RADIO_INIT :
             if( !radio.init() ) {
                 ErrorHandler::addError(ErrorHandler::radioInitFail);
-                Debug::println("Radio start failed");
+                usb_send_text("Radio start failed", 18);
                 return false;
             }
 
-            setupState = RadioSetupStates::SET_CONFIG;
+            setupState = radio_SetupStates::SET_CONFIG;
             return true;
             break;
 
-        case RadioSetupStates::SET_CONFIG : {
+        case radio_SetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-                    Debug::println("failed to set radio freq");
+                    usb_send_text("failed to set radio freq", 24);
                     return false;
                 }
 
@@ -115,57 +110,58 @@ bool Radio::setup() {
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
                 
-                setupState = RadioSetupStates::SEND_CONN;
+                setupState = radio_SetupStates::SEND_CONN;
                 return true;
         }
             break;
         
-        case RadioSetupStates::SEND_CONN : {
+        case radio_SetupStates::SEND_CONN : {
             
             if (SKIP_HANDSHAKE) {
-                setupState = RadioSetupStates::COMPLETE;
+                setupState = radio_SetupStates::COMPLETE;
                 return true;
             }
 
             setupTimmer = millis(); // Record time of sent connection ping
             
-            RadioMessage conn;
+            radio_Message conn;
             memcpy(conn.textArray, "AFCDrone", 8);
 
-            sendMessage(conn, MessageType::SETUP);
+            radio_sendMessage(conn, radio_MessageType::SETUP);
             
-            setupState = RadioSetupStates::WAIT_ACK;
+            setupState = radio_SetupStates::WAIT_ACK;
             return true;
         
         break;
         }
-        case RadioSetupStates::WAIT_ACK : {
+        case radio_SetupStates::WAIT_ACK : {
             
-            // Check for ack
-            uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
-            uint8_t buffLength;
+            // // Check for ack
+            // uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
+            // uint8_t buffLength;
 
-            // Check if there is an ack waiting
-            if (!getMessage(recvBuffer, buffLength)) {
-                // Go back to sending a message if the ack hasnt been received after 1 second
-                if(millis() > setupTimmer + 1000) {
-                    setupTimmer = millis();
-                    Debug::print("BaseStation not connected. Retrying... #");
-                    Debug::println(retryCounter++);
+            
+            // // Check if there is an ack waiting
+            // if (!radio_getMessage(recvBuffer, buffLength)) {
+            //     // Go back to sending a message if the ack hasnt been received after 1 second
+            //     if(millis() > setupTimmer + 1000) {
+            //         setupTimmer = millis();
+            //         usb_send_text("BaseStation not connected. Retrying... #", 40);
+            //         // Debug::println(retryCounter++);
 
-                    setupState = RadioSetupStates::SEND_CONN;
-                }
-                return true; // Return back to loop
-            }
+            //         setupState = radio_SetupStates::SEND_CONN;
+            //     }
+            //     return true; // Return back to loop
+            // }
 
-            // Check if correct ack was recieved 
-            if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
-                // Update state to complete the radio init
-                Debug::println("BaseStation CONNECTED");
+            // // Check if correct ack was recieved 
+            // if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
+            //     // Update state to complete the radio init
+            //     usb_send_text("BaseStation CONNECTED", 21);
                 
-                setupState = RadioSetupStates::COMPLETE;
-                return true;
-            }
+            //     setupState = radio_SetupStates::COMPLETE;
+            //     return true;
+            // }
             // Return to loop
             return true;
             break;
@@ -178,17 +174,17 @@ bool Radio::setup() {
 
 }
 
-bool Radio::setupComplete() {
-    return setupState == RadioSetupStates::COMPLETE;
+bool radio_setupComplete() {
+    return setupState == radio_SetupStates::COMPLETE;
 }
 
 // MARK: Periodic Update
-void Radio::update() {
+void radio_update() {
     // Get current time;
     uint32_t now = millis();
 
     // Only run radio if setup has been completed. 
-    if (setupComplete()) {
+    if (radio_setupComplete()) {
 
         // Check if radio has available packets
         if (radio.available()) {
@@ -201,26 +197,34 @@ void Radio::update() {
                 uint8_t messageType = radio.headerFlags();
 
                 // TODO implement packet counting and error checking
-                if (currentPacketNum != globalPacketNum + 1){
+                if (currentPacketNum != radioPacketNum + 1){
 
                 }
 
                 // Copy the data from the message
-                header_t header = {currentPacketNum, messageType};
-                RadioMessage msg;
-                memcpy(&msg, buffer + sizeof(header_t), sizeof(RadioMessage));
+                radio_Header header = {currentPacketNum, messageType};
+                radio_Message msg;
+                if (len != sizeof(msg)) {
+                    return;
+                }
+                memcpy(&msg, buffer, sizeof(msg));
 
-                switch (static_cast<MessageType>(header.packetType))
+                if (USB_RELAY) {
+                    usb_radio_relay(msg, static_cast<radio_MessageType>(header.packetType),
+                                    header.msgNum, usb_radio_direction::RECEIVED);
+                }
+
+                switch (static_cast<radio_MessageType>(header.packetType))
                 {
-                case MessageType::SETUP :
+                case radio_MessageType::SETUP :
                     /* code */
                     break;
                 
-                case MessageType::COMMAND :
+                case radio_MessageType::COMMAND :
                     radio_handleCommand(msg);
                     break;
 
-                case MessageType::CONFIG :
+                case radio_MessageType::CONFIG :
                 
                 default:
                     break;
@@ -242,19 +246,23 @@ void Radio::update() {
         }
 
         // Send one message from the outgoing buffer
-        RadioPacket packet;
+        radio_Packet packet;
         if (radio_tx_buffer.size() != 0) {
             packet = radio_tx_buffer.pop_front();
 
-            header_t header{ globalPacketNum++, static_cast<uint8_t>(packet.type) };
+            radio_Header header{ radioPacketNum++, static_cast<uint8_t>(packet.type) };
 
-            uint8_t frame[sizeof(RadioMessage)];
-            memcpy(frame, &packet.message, sizeof(RadioMessage));
+            uint8_t frame[sizeof(radio_Message)];
+            memcpy(frame, &packet.message, sizeof(radio_Message));
 
-            radio.setHeaderId(header.packetType);
+            radio.setHeaderId(header.msgNum);
             radio.setHeaderFlags(header.packetType);
 
             radio.send(frame, sizeof(frame)); // Non-blocking transmit start
+            if (USB_RELAY) {
+                usb_radio_relay(packet.message, packet.type, header.msgNum,
+                                usb_radio_direction::SENT);
+            }
             lastTxTime = now;
         }
 
@@ -263,65 +271,65 @@ void Radio::update() {
 }
 
 /** Adds message to radio queue */
-void Radio::sendMessage(RadioMessage data, MessageType type) {
+void radio_sendMessage(radio_Message data, radio_MessageType type) {
     radio_tx_buffer.push_back({data, type});
 }
 
 // MARK: Status Senders
 
-void Radio::sendStatus0() {
-    RadioMessage msg;
+void radio_sendStatus0() {
+    radio_Message msg;
 
-    msg.status0.loopTimeAvg = Drone::rollAvg;
+    msg.status0.loopTimeAvg = drone_rollAvg;
     msg.status0.loopTimeMax = Drone::worstTime;
     msg.status0.RunTime = millis() / 1000;
-    msg.status0.rssi = lastRssi;
+    msg.status0.rssi = radio_lastRssi;
     msg.status0.currentMode = (uint8_t) Drone::state;
 
-    sendMessage( msg, MessageType::STATUS0);
+    radio_sendMessage( msg, radio_MessageType::STATUS0);
 }
 
-void Radio::sendStatus1() {
-    RadioMessage msg;
+void radio_sendStatus1() {
+    radio_Message msg;
 
     msg.status1.gimbalPitchNorm = Gimbal::getPitch();
     msg.status1.gimbalYawNorm = Gimbal::getYaw();
-    msg.status1.topServoSet = Gimbal::getTopServo();
-    msg.status1.bottomServoSet = Gimbal::getBottomServo();
+    msg.status1.topServoSet = gimbal_topServo;
+    msg.status1.bottomServoSet = gimbal_botServo;
 
-    sendMessage(msg, MessageType::STATUS1);
+    radio_sendMessage(msg, radio_MessageType::STATUS1);
 }
 
-void Radio::sendStatus2() {
-[[maybe_unused]]    RadioMessage msg;
+void radio_sendStatus2() {
+[[maybe_unused]]    radio_Message msg;
 
 
 
 }
 
-void Radio::sendStatus3() {
-[[maybe_unused]]    RadioMessage msg;
+void radio_sendStatus3() {
+[[maybe_unused]]    radio_Message msg;
 
     
 
 }
 
-void Radio::sendStatus4() {
-[[maybe_unused]]    RadioMessage msg;
+void radio_sendStatus4() {
+[[maybe_unused]]    radio_Message msg;
 
     
 
 }
 
-void Radio::sendStatus5() {
-[[maybe_unused]]    RadioMessage msg;
+void radio_sendStatus5() {
+[[maybe_unused]]    radio_Message msg;
 
     
 
 }
 
-void Radio::sendStatus6() {
-[[maybe_unused]]    RadioMessage msg;
+void radio_sendStatus6() {
+[[maybe_unused]]    radio_Message msg;
 
     
 
@@ -329,7 +337,7 @@ void Radio::sendStatus6() {
 
 // MARK: Message Handlers
 
-void radio_handleCommand(Radio::RadioMessage msg) {
+void radio_handleCommand(radio_Message msg) {
 
 // Sets a target position
     if (msg.command.flags.targSlot == 0) {
@@ -346,24 +354,21 @@ void radio_handleCommand(Radio::RadioMessage msg) {
 
     drone_activeSlot = msg.command.flags.activeSlot;
 
+}
 
+void radio_handleConfig(radio_Message msg) {
 
 
 }
 
-void radio_handleConfig(Radio::RadioMessage msg) {
-
-
-}
-
-void radio_handleSetup(Radio::RadioMessage msg) {
+void radio_handleSetup(radio_Message msg) {
 
 
 }
 
 // MARK: Radio helpers
-
-bool Radio::getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
+[[maybe_unused]]
+static bool radio_getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                         , uint8_t& bufferLength ) {
 
     // If radio has no message return false

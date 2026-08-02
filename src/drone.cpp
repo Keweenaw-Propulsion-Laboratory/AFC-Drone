@@ -5,7 +5,6 @@
 #include "gyro.h"
 #include "gimbal.h"
 #include "error.h" 
-#include "debug.h"
 #include "motor.h"
 
 // Initialize state to BOOT
@@ -15,6 +14,7 @@ Drone::DroneStates Drone::state = Drone::DroneStates::BOOT;
 uint16_t Drone::lastLoopTime = 0;
 uint16_t Drone::worstTime = 0;
 uint16_t Drone::bestTime = -1;
+uint16_t drone_rollAvg = 0;
 
 Target_t drone_targ0, drone_targ1;
 
@@ -31,27 +31,22 @@ bool Drone::startup() {
     {
     case DroneStates::BOOT:
         // This state handles any internal initialization that the controller may need to do
-        pinMode(STATUS_LED, OUTPUT);
-
-        // Check if there is a serial connection.
-        // If true then move on with loop
-        if(!Debug::checkSerial()) {return false;}
-        
+        pinMode(STATUS_LED, OUTPUT);       
         
         // Transition to next state
         state = DroneStates::RADIO_SETUP;
-        Debug::println("DRONE: State progressing from BOOT to RADIO_SETUP");
+        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP", 49);
         break;
     
     case DroneStates::RADIO_SETUP :
-        if(!Radio::setup()) {
+        if(!radio_setup()) {
             state = DroneStates::FAULT_ERROR;
-            Debug::println("DRONE: SETUP FAILURE in stage RADIO_SETUP");
+            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP", 41);
         }
 
-        if (Radio::setupComplete()) {
+        if (radio_setupComplete()) {
             state = DroneStates::SENSOR_SETUP;
-            Debug::println("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
+            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP", 57);
         }
         break;
 
@@ -61,28 +56,33 @@ bool Drone::startup() {
         // Run setup functions here
         if (!Gyro::setup()) {
             state = DroneStates::FAULT_ERROR;
-            Debug::println("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
+            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO", 50);
         }
 
         // if (!GPS::setup()) {
         //     state = DroneStates::FAULT_ERROR;
-        //     Debug::println("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS")
+        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS", 49)
         // }
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
-            Debug::println("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
-            state = DroneStates::READY_ARMED;
+            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED", 57);
+            state = DroneStates::CONTROL_SETUP;
         }
 
         break;
+
+    case DroneStates::CONTROL_SETUP :
+        Gimbal::setup();
+        motor_setup();
+        state = DroneStates::READY_ARMED;
 
     default:
         break;
     }
 
     if (state == DroneStates::READY_ARMED){
-        Debug::println("Drone ARMED");
+        usb_send_text("Drone ARMED", 11);
         return true;
     }
 
@@ -90,16 +90,34 @@ bool Drone::startup() {
 
 }
 
+
 /**
  * Main update loop
  * 
  * Runs at main loop speed and is not controlled by ISR
  */
 void Drone::update() {
-    Radio::update();
-    usb_update();
+    static Target_t* slot;
+
+    if (drone_activeSlot == 0) {
+        slot = &drone_targ0;
+    } else {
+        slot = &drone_targ1;
+    }
+
+    // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
+    Gimbal::set(slot->gimbalX / 1638.0f, slot->gimbalY / 1368.0f);
+
+    motor_setMotor(slot->motor0Speed, slot->motor1Speed);
 
 
+    static uint32_t lastTelemetryMs = 0;
+    constexpr uint32_t telemetryIntervalMs = 100;
+    const uint32_t now = millis();
+    if (now - lastTelemetryMs >= telemetryIntervalMs) {
+        usb_send_telemetry();
+        lastTelemetryMs = now;
+    }
     return;
 }
 
@@ -184,21 +202,3 @@ const uint32_t cycleDuration = 1200; // Total duration of the pattern in ms
         
 }
 
-// MARK: Periodic
-
-Target_t* targPointer = &drone_targ0;
-
-void drone_update() {
-
-    if (drone_activeSlot) {
-        targPointer = &drone_targ0;
-    } else {
-        targPointer = &drone_targ1;
-    }
-
-    // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
-    Gimbal::set(targPointer->gimbalX / 1638.0f, targPointer->gimbalY / 1368.0f);
-
-    motor_setMotor(targPointer->motor0Speed, targPointer->motor1Speed);
-
-}

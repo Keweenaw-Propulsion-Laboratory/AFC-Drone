@@ -10,14 +10,10 @@ constexpr int LED = 13;
 extern int16_t radio_lastRssi;
 
 
-
-class Radio {
-    public:
-
         /**
         * Keeps track of the different stages of Radio setup
         */
-        enum class RadioSetupStates : uint8_t{
+        enum class radio_SetupStates : uint8_t{
             RESET1,
             RESET2,
             RADIO_INIT,
@@ -27,8 +23,8 @@ class Radio {
             COMPLETE
         };
 
-        static bool setup();
-        static bool setupComplete();
+        bool radio_setup();
+        bool radio_setupComplete();
 
         enum class RadioStates : uint8_t{
             HARDWARE_INIT,
@@ -37,7 +33,7 @@ class Radio {
             READY
         };
 
-        struct __attribute__((packed)) header_t {
+        struct __attribute__((packed)) radio_Header {
             uint8_t msgNum;
             uint8_t packetType;
         };
@@ -116,7 +112,7 @@ class Radio {
         };
 
         // uinion all of the radio messages for type safety
-        union RadioMessage {
+        union radio_Message {
             uint64_t raw;
             StatusMsg0_t status0;
             StatusMsg1_t status1;
@@ -131,10 +127,10 @@ class Radio {
         };
     
         // Ensure that all messages are 8 bytes
-        static_assert(sizeof(RadioMessage) == sizeof(uint64_t), "Radio messages must be 8 bytes");
+        static_assert(sizeof(radio_Message) == sizeof(uint64_t), "Radio messages must be 8 bytes");
         
         // MARK: Message structure
-        enum class MessageType : uint8_t {
+        enum class radio_MessageType : uint8_t {
             SETUP = 0,
             STATUS0 = 1,
             STATUS1 = 2,
@@ -148,37 +144,35 @@ class Radio {
 
         };
 
+    struct __attribute__((packed)) radio_Packet {
+        radio_Message message;
+        radio_MessageType type;
 
-        static void sendStatus0();
-        static void sendStatus1();
-        static void sendStatus2();
-        static void sendStatus3();
-        static void sendStatus4();
-        static void sendStatus5();
-        static void sendStatus6();
+        // 1. Constructor allowing implicit conversion from '0' (fixes the Circular_Buffer fallback)
+        radio_Packet(int = 0) 
+            : message{0}, type(radio_MessageType::SETUP) {}
+
+        // 2. Multi-argument constructor for initializing packets cleanly
+        radio_Packet(radio_Message msg, radio_MessageType t) 
+            : message(msg), type(t) {}
+    };
+
+        void radio_sendStatus0();
+        void radio_sendStatus1();
+        void radio_sendStatus2();
+        void radio_sendStatus3();
+        void radio_sendStatus4();
+        void radio_sendStatus5();
+        void radio_sendStatus6();
         
-        static void sendMessage(RadioMessage data, MessageType type);
-               
-
-        static bool getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
-                                , uint8_t& bufferLength );
 
         /**
          * All of the tasks that the radio needs to do during the periodic loop
          */
-        static void update();
+        void radio_update();
         
-
-
-    private:
-    // static RH_RF69 radio; // Singleton Radio object
-    // static uint8_t globalPacketNum; // The last sent or recv packet number. This should match the BaseStation
-    // static int16_t lastRssi;
-
-    // static RadioSetupStates setupState; // Current setup state
 
     // acknowledgement for a message.  
     static constexpr uint8_t ACK[8] = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
         
 
-};
