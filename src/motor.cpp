@@ -1,11 +1,11 @@
 #include "motor.h"
 #include "Arduino.h"
 
-constexpr int bottomMotor = 4;
-constexpr int topMotor = 5;
+static constexpr int bottomMotor = 4;
+static constexpr int topMotor = 5;
 
-float bottomSetSpeed = 0.0f;
-float topSetSpeed = 0.0f;
+uint8_t motor_bottomSetSpeed = 0;
+uint8_t motor_topSetSpeed = 0;
 
 void motor_setup() {
     pinMode(bottomMotor, OUTPUT);
@@ -17,10 +17,10 @@ void motor_setup() {
     analogWriteResolution(8);
 }
 
-void motor_setMotor(float bottomMotorSpeed, float topMotorSpeed ) {
-    if (bottomMotorSpeed == bottomSetSpeed && topMotorSpeed == topSetSpeed) return; // Skip if speed is already set.
-    analogWrite(bottomMotor, bottomMotorSpeed * 256);
-    analogWrite(topMotor, topMotorSpeed * 256);
-    bottomSetSpeed = bottomMotorSpeed;
-    topSetSpeed = topMotorSpeed;
+void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
+    if (bottomMotorSpeed == motor_bottomSetSpeed && topMotorSpeed == motor_topSetSpeed) return; // Skip if speed is already set.
+    analogWrite(bottomMotor, bottomMotorSpeed);
+    analogWrite(topMotor, topMotorSpeed);
+    motor_bottomSetSpeed = bottomMotorSpeed;
+    motor_topSetSpeed = topMotorSpeed;
 }

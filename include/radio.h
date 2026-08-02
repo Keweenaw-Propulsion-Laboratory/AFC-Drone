@@ -7,6 +7,8 @@ constexpr int RFM69_INT = 40; //
 constexpr int RFM69_RST = 41;  // "A"
 constexpr int LED = 13;
 
+extern int16_t radio_lastRssi;
+
 
 
 class Radio {
@@ -52,49 +54,52 @@ class Radio {
         };
 
         struct __attribute__((packed)) StatusMsg1_t {
-            int8_t gimbalPitchNorm; // Normalized gimbal pitch
-            int8_t gimbalYawNorm;  // Normalized gimbal yaw
-            uint8_t topServoSet; // The raw setpoint in degrees 
-            uint8_t bottomServoSet; // The raw setpoint in degrees. 
-            uint8_t motor1set; // Motor 1 set point
-            uint8_t motor2set; // Motor 2 set point
-            uint16_t voltage; // Current voltage of the battery. 
+            int16_t gimbalPitchNorm; // Normalized gimbal pitch
+            int16_t gimbalYawNorm;  // Normalized gimbal yaw
+            uint16_t topServoSet; // The raw setpoint in degrees 
+            uint16_t bottomServoSet; // The raw setpoint in degrees. 
         };
 
+
         struct __attribute__((packed)) StatusMsg2_t {
+            uint16_t motor1set; // Motor 1 set point
+            uint16_t motor2set; // Motor 2 set point
+            uint16_t voltage; // Current voltage of the battery. 
+            uint16_t empty; // Reserved
+        };
+
+        struct __attribute__((packed)) StatusMsg3_t {
             int16_t qR;
             int16_t qI;
             int16_t qJ;
             int16_t qK;
         };
 
-        struct __attribute__((packed)) StatusMsg3_t {
+        struct __attribute__((packed)) StatusMsg4_t {
             int16_t accelX;
             int16_t accelY;
             int16_t accelZ;
             int16_t empty;
         };
 
-        struct __attribute__((packed)) StatusMsg4_t {
+        struct __attribute__((packed)) StatusMsg5_t {
             int16_t velX;
             int16_t velY;
             int16_t velZ;
             int16_t empty;
         };
 
-        struct __attribute__((packed)) StatusMsg5_t {
+        struct __attribute__((packed)) StatusMsg6_t {
             int16_t posX;
             int16_t posY;
             int16_t posZ;
             int16_t empty;
         };
 
-        struct __attribute__((packed)) StatusMsg6_t {
+        struct __attribute__((packed)) StatusMsg7_t {
             float latitude;
             float longitude;
-        };
-
-        
+        };      
 
         struct __attribute__((packed)) Command_t {
             struct __attribute__((packed)) flags {

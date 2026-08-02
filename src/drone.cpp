@@ -1,6 +1,7 @@
 #include "drone.h"
 
 #include "radio.h"
+#include "usb.h"
 #include "gyro.h"
 #include "gimbal.h"
 #include "error.h" 
@@ -89,9 +90,14 @@ bool Drone::startup() {
 
 }
 
+/**
+ * Main update loop
+ * 
+ * Runs at main loop speed and is not controlled by ISR
+ */
 void Drone::update() {
-    
-
+    Radio::update();
+    usb_update();
 
 
     return;

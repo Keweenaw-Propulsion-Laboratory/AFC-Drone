@@ -226,18 +226,6 @@ void Radio::update() {
                     break;
                 }
 
-
-
-
-
-
-                // // Convert to a RadioPacket
-                // RadioPacket packet = { msg, static_cast<MessageType>(header.packetType)};
-
-                // // Save to rx buffer
-                // radio_rx_buffer.push_back(packet);
-
-
             }
 
         }
@@ -253,16 +241,18 @@ void Radio::update() {
             return;
         }
 
-        // Send any messages in the outgoing buffer
+        // Send one message from the outgoing buffer
         RadioPacket packet;
         if (radio_tx_buffer.size() != 0) {
             packet = radio_tx_buffer.pop_front();
 
             header_t header{ globalPacketNum++, static_cast<uint8_t>(packet.type) };
 
-            uint8_t frame[sizeof(header_t) + sizeof(RadioMessage)];
-            memcpy(frame, &header, sizeof(header_t));
-            memcpy(frame + sizeof(header_t), &packet.message, sizeof(RadioMessage));
+            uint8_t frame[sizeof(RadioMessage)];
+            memcpy(frame, &packet.message, sizeof(RadioMessage));
+
+            radio.setHeaderId(header.packetType);
+            radio.setHeaderFlags(header.packetType);
 
             radio.send(frame, sizeof(frame)); // Non-blocking transmit start
             lastTxTime = now;

@@ -8,7 +8,7 @@ enum usb_message_types : uint8_t {
     COMMAND
 };
 
-
+void usb_update();
 
 /**
  * Send USB debug messages
