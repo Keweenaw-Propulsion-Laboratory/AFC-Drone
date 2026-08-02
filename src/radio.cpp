@@ -9,6 +9,12 @@
 #include "gimbal.h"
 #include "gyro.h"
 
+/** Bool value to skip radio handshake
+ * This should only be used for testing
+ * and debugging.
+ */
+constexpr bool SKIP_HANDSHAKE = true;
+
 /**Minimum time to wait in ms between transmissions */
 constexpr uint32_t RX_WINDOW_MIN = 10;
 
@@ -115,6 +121,12 @@ bool Radio::setup() {
             break;
         
         case RadioSetupStates::SEND_CONN : {
+            
+            if (SKIP_HANDSHAKE) {
+                setupState = RadioSetupStates::COMPLETE;
+                return true;
+            }
+
             setupTimmer = millis(); // Record time of sent connection ping
             
             RadioMessage conn;

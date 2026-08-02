@@ -1,13 +1,13 @@
 #define STATUS_LED 10
 #include <cstdint>
 
-typedef struct {
+struct Target_t {
     int16_t gimbalX;
     int16_t gimbalY;
     uint16_t targetRoll;
     uint8_t motor0Speed;
     uint8_t motor1Speed;
-} Target_t;
+};
 
 extern Target_t drone_targ0;
 extern Target_t drone_targ1;

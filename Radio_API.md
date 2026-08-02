@@ -626,7 +626,7 @@ Examples:
 The drone defines two target structures:
 
 ```cpp
-typedef struct {
+struct {
     int16_t gimbalX;
     int16_t gimbalY;
     uint16_t targetRoll;
