@@ -106,7 +106,7 @@ void Drone::update() {
     }
 
     // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
-    Gimbal::set(slot->gimbalX / 1638.0f, slot->gimbalY / 1368.0f);
+    Gimbal::set(slot->gimbalX / 1638.0f, slot->gimbalY / 1638.0f);
 
     motor_setMotor(slot->motor0Speed, slot->motor1Speed);
 

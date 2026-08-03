@@ -6,6 +6,7 @@ static constexpr int bottomMotorPin = 29;
 static constexpr int topMotorPin = 28;
 
 static constexpr int ESC_MIN_US = 1000;
+static constexpr int ESC_MIN_RUNNING = 1333;
 static constexpr int ESC_MAX_US = 2000;
 
 static Servo topMotor;
@@ -24,16 +25,28 @@ void motor_setup() {
 }
 
 void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
-    uint16_t bottomSpeed =
-        ESC_MIN_US +
-        ((uint32_t)bottomMotorSpeed * (ESC_MAX_US - ESC_MIN_US)) / 255;
-
-    uint16_t topSpeed =
-        ESC_MIN_US +
-        ((uint32_t) topMotorSpeed * (ESC_MAX_US - ESC_MIN_US)) / 255;
 
     motor_topSetSpeed = topMotorSpeed;
     motor_bottomSetSpeed = bottomMotorSpeed;
+    
+    uint16_t bottomSpeed =
+        ESC_MIN_RUNNING +
+        ((uint32_t)bottomMotorSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
+
+    uint16_t topSpeed =
+        ESC_MIN_RUNNING +
+        ((uint32_t) topMotorSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
+
+ 
+    // If motors are suppose to be off set to min armed value
+    if (bottomMotorSpeed == 0) {
+        bottomSpeed = ESC_MIN_US;
+    }
+
+    if (topMotorSpeed == 0) {
+        topSpeed = ESC_MIN_US;
+    }
+
 
     bottomMotor.writeMicroseconds(bottomSpeed);
     topMotor.writeMicroseconds(topSpeed);
