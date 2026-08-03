@@ -7,7 +7,7 @@ constexpr int RFM69_INT = 40; //
 constexpr int RFM69_RST = 41;  // "A"
 constexpr int LED = 13;
 
-extern int16_t radio_lastRssi;
+extern int16_t radio_avgRSSI;
 
 
         /**

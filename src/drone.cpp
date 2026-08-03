@@ -116,9 +116,19 @@ void Drone::update() {
     const uint32_t now = millis();
     if (now - lastTelemetryMs >= telemetryIntervalMs) {
         usb_send_telemetry();
+        radio_sendStatus0();
+        radio_sendStatus1();
+        radio_sendStatus2();
+        radio_sendStatus3();
+        radio_sendStatus4();
+        radio_sendStatus5();
+        radio_sendStatus6();
         lastTelemetryMs = now;
     }
-    return;
+
+
+
+
 }
 
 

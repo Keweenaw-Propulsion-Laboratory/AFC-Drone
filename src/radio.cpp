@@ -8,6 +8,7 @@
 #include "gimbal.h"
 #include "gyro.h"
 #include "usb.h"
+#include "motor.h"
 
 /** Bool value to skip radio handshake
  * This should only be used for testing
@@ -26,7 +27,13 @@ constexpr uint32_t RX_WINDOW_MIN = 10;
 // Initialize static variables
 RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
 uint8_t radioPacketNum = 0; // Set packet number to zero;
-int16_t radio_lastRssi = 0;
+
+int16_t radio_avgRSSI = 0;
+static float rollingRssi = 0.0f;
+static bool rollingRssiInitialized = false;
+
+constexpr float RSSI_ALPHA = 0.1f;
+
 uint32_t lastTxTime = 0; /** Last transmission time */
 
 
@@ -192,6 +199,18 @@ void radio_update() {
             uint8_t len = sizeof(buffer);
 
             if( radio.recv(buffer, &len) ) { // Get message from radio
+                int16_t newRssi = radio.lastRssi();
+
+                if (!rollingRssiInitialized) {
+                    rollingRssi = static_cast<float>(newRssi);
+                    rollingRssiInitialized = true;
+                } else {
+                    rollingRssi += RSSI_ALPHA *
+                                (static_cast<float>(newRssi) - rollingRssi);
+                }
+
+                radio_avgRSSI = static_cast<int16_t>(roundf(rollingRssi));
+                
                 // Save the headers
                 uint8_t currentPacketNum = radio.headerId();
                 uint8_t messageType = radio.headerFlags();
@@ -203,7 +222,7 @@ void radio_update() {
 
                 // Copy the data from the message
                 radio_Header header = {currentPacketNum, messageType};
-                radio_Message msg;
+                radio_Message msg{};
                 if (len != sizeof(msg)) {
                     return;
                 }
@@ -278,22 +297,22 @@ void radio_sendMessage(radio_Message data, radio_MessageType type) {
 // MARK: Status Senders
 
 void radio_sendStatus0() {
-    radio_Message msg;
+    radio_Message msg{};
 
     msg.status0.loopTimeAvg = drone_rollAvg;
     msg.status0.loopTimeMax = Drone::worstTime;
     msg.status0.RunTime = millis() / 1000;
-    msg.status0.rssi = radio_lastRssi;
+    msg.status0.rssi = radio_avgRSSI;
     msg.status0.currentMode = (uint8_t) Drone::state;
 
     radio_sendMessage( msg, radio_MessageType::STATUS0);
 }
 
 void radio_sendStatus1() {
-    radio_Message msg;
+    radio_Message msg{};
 
-    msg.status1.gimbalPitchNorm = Gimbal::getPitch();
-    msg.status1.gimbalYawNorm = Gimbal::getYaw();
+    msg.status1.gimbalPitchNorm = gimbal_pitch;
+    msg.status1.gimbalYawNorm = gimbal_yaw;
     msg.status1.topServoSet = gimbal_topServo;
     msg.status1.bottomServoSet = gimbal_botServo;
 
@@ -301,38 +320,60 @@ void radio_sendStatus1() {
 }
 
 void radio_sendStatus2() {
-[[maybe_unused]]    radio_Message msg;
+    radio_Message msg{};
+    
+    msg.status2.motor1set = motor_bottomSetSpeed;
+    msg.status2.motor2set = motor_topSetSpeed;
+    msg.status2.voltage = 0;
 
-
+    radio_sendMessage(msg, radio_MessageType::STATUS2);
 
 }
 
 void radio_sendStatus3() {
-[[maybe_unused]]    radio_Message msg;
+    radio_Message msg{};
 
-    
+    msg.status3.qI = 0;
+    msg.status3.qJ = 0;
+    msg.status3.qK = 0;
+    msg.status3.qR = 0;
 
+    radio_sendMessage(msg, radio_MessageType::STATUS3);
 }
 
 void radio_sendStatus4() {
-[[maybe_unused]]    radio_Message msg;
+    radio_Message msg{};
 
-    
+    msg.status4.accelX = 0;
+    msg.status4.accelY = 0;
+    msg.status4.accelZ = 0;
+    msg.status4.empty = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS4);
 
 }
 
 void radio_sendStatus5() {
-[[maybe_unused]]    radio_Message msg;
+    radio_Message msg{};
 
-    
+    msg.status5.velX = 0;
+    msg.status5.velY = 0;
+    msg.status5.velZ = 0;
+    msg.status5.empty = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS5);
 
 }
 
 void radio_sendStatus6() {
-[[maybe_unused]]    radio_Message msg;
+    radio_Message msg{};
 
+    msg.status6.posX = 0;
+    msg.status6.posY = 0;
+    msg.status6.posZ = 0;
+    msg.status6.empty = 0;
     
-
+    radio_sendMessage(msg, radio_MessageType::STATUS6);
 }
 
 // MARK: Message Handlers

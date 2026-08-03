@@ -29,9 +29,6 @@ class Gimbal {
         static void zero();
         static void selfTest();
 
-        static float getPitch() {return pitch;}
-        static float getYaw() {return yaw;}
-
     private:
         static float pitch;
         static float yaw;

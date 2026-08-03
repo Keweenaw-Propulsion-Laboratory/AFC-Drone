@@ -2,8 +2,8 @@
 #include "Arduino.h"
 #include "Servo.h"
 
-static constexpr int bottomMotorPin = 29;
-static constexpr int topMotorPin = 28;
+static constexpr int BOTTOM_MOTOR_PIN = 29;
+static constexpr int TOP_MOTOR_PIN = 28;
 
 static constexpr int ESC_MIN_US = 1000;
 static constexpr int ESC_MIN_RUNNING = 1333;
@@ -16,8 +16,8 @@ uint8_t motor_bottomSetSpeed = 0;
 uint8_t motor_topSetSpeed = 0;
 
 void motor_setup() {
-    bottomMotor.attach(bottomMotorPin);
-    topMotor.attach(topMotorPin);
+    bottomMotor.attach(BOTTOM_MOTOR_PIN);
+    topMotor.attach(TOP_MOTOR_PIN);
 
     // Zero out the controls
     bottomMotor.writeMicroseconds(ESC_MIN_US); 

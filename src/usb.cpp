@@ -328,7 +328,7 @@ void usb_send_telemetry() {
     tx_message.telemetry.loopTimeAvg = drone_rollAvg;
     tx_message.telemetry.loopTimeMax = Drone::worstTime;
     tx_message.telemetry.runTime = millis() / 1000;
-    tx_message.telemetry.rssi = radio_lastRssi;
+    tx_message.telemetry.rssi = radio_avgRSSI;
     tx_message.telemetry.currentMode = (uint8_t) Drone::state;
     tx_message.telemetry.gimbalPitch = gimbal_pitch;
     tx_message.telemetry.gimbalYaw = gimbal_yaw;
