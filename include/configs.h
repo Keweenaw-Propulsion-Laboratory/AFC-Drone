@@ -45,6 +45,7 @@ enum class ConfigKey : uint16_t {
 enum class ConfigOp : uint8_t {
     READ = 1,
     SET = 2,
+    SET_RESPONSE = 0x82,
 
     ZERO_ALL = 255, // Zeros out all config memory.
 };
@@ -65,6 +66,11 @@ union ConfigState {
     ConfigResult result;
 };
 
+struct ConfigUpdate {
+    ConfigKey key;
+    int32_t value;
+};
+
 void config_load();
 void config_save();
 const PersistentConfig& config_get();
@@ -79,6 +85,10 @@ void restoreDefaults();
  * Configuration is never written while the vehicle is in FLIGHT.
  */
 ConfigResult config_set(ConfigKey key, int32_t value);
+
+/** Apply all valid updates and write EEPROM at most once. */
+void config_set_batch(const ConfigUpdate* updates, ConfigResult* results,
+                      uint8_t count);
 
 /**
  * Return one setting using the same int32_t representation accepted by

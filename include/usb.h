@@ -8,9 +8,10 @@ enum class radio_MessageType : uint8_t;
 enum class usb_message_types : uint8_t {
     RAW = 0, // Explicit value
     DEBUG_TEXT = 1,
-    RADIO_PACKET, 
-    TELEMETRY,
-    COMMAND
+    RADIO_PACKET = 2, 
+    TELEMETRY = 3,
+    COMMAND = 4,
+    CONFIG = 5,
 };
 
 // Wire format: 0xA5 0x5A, version, packetNum (little-endian), type, length,

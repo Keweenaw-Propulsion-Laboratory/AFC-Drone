@@ -86,13 +86,7 @@ void restoreDefaults() {
     config_save();
 }
 
-ConfigResult config_set(ConfigKey key, int32_t value) {
-    if (Drone::state == Drone::DroneStates::FLIGHT) {
-        return ConfigResult::UNSAFE_STATE;
-    }
-
-    bool changed = false;
-
+static ConfigResult config_apply(ConfigKey key, int32_t value, bool& changed) {
     switch (key) {
     case ConfigKey::TxPowerDbm:
         if (value < 14 || value > 20) return ConfigResult::INVALID_VALUE;
@@ -141,13 +135,50 @@ ConfigResult config_set(ConfigKey key, int32_t value) {
         changed = config.motor2offset != static_cast<int8_t>(value);
         config.motor2offset = static_cast<int8_t>(value);
         break;
+
+    default:
+        return ConfigResult::INVALID_KEY;
     }
+
+    return ConfigResult::OK;
+}
+
+ConfigResult config_set(ConfigKey key, int32_t value) {
+    if (Drone::state == Drone::DroneStates::FLIGHT) {
+        return ConfigResult::UNSAFE_STATE;
+    }
+
+    bool changed = false;
+    const ConfigResult result = config_apply(key, value, changed);
 
     if (changed) {
         config_save();
     }
 
-    return ConfigResult::OK;
+    return result;
+}
+
+void config_set_batch(const ConfigUpdate* updates, ConfigResult* results,
+                      uint8_t count) {
+    if (updates == nullptr) return;
+
+    if (Drone::state == Drone::DroneStates::FLIGHT) {
+        for (uint8_t i = 0; i < count; ++i) {
+            if (results != nullptr) results[i] = ConfigResult::UNSAFE_STATE;
+        }
+        return;
+    }
+
+    bool anyChanged = false;
+    for (uint8_t i = 0; i < count; ++i) {
+        bool changed = false;
+        const ConfigResult result = config_apply(updates[i].key,
+                                                 updates[i].value, changed);
+        if (results != nullptr) results[i] = result;
+        anyChanged = anyChanged || changed;
+    }
+
+    if (anyChanged) config_save();
 }
 
 int32_t config_read(ConfigKey key, ConfigResult& status) {
