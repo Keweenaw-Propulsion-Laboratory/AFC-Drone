@@ -1,4 +1,5 @@
 #include "RH_RF69.h"
+#include "configs.h"
 
 #define RF69_FREQ 915.0
 
@@ -111,6 +112,13 @@ extern int16_t radio_avgRSSI;
 
         };
 
+        struct __attribute__((packed)) ConfigPacket{
+            uint8_t version;
+            ConfigState state;
+            ConfigKey configKey;
+            uint32_t value;
+        };
+
         // uinion all of the radio messages for type safety
         union radio_Message {
             uint64_t raw;
@@ -122,6 +130,8 @@ extern int16_t radio_avgRSSI;
             StatusMsg5_t status5;
             StatusMsg6_t status6;
             Command_t command;
+            ConfigPacket config;
+
             char textArray[8];
             
         };

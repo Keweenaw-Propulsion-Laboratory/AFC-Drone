@@ -11,12 +11,6 @@
 #include "motor.h"
 #include "configs.h"
 
-/** Bool value to skip radio handshake
- * This should only be used for testing
- * and debugging.
- */
-static constexpr bool SKIP_HANDSHAKE = true;
-
 /**
  * Any radio packet sent out will also be mirrored over USB.
  */
@@ -402,7 +396,37 @@ void radio_handleCommand(radio_Message msg) {
 }
 
 void radio_handleConfig(radio_Message msg) {
+    radio_Message response{};
+    
+    if (msg.config.version != CONFIG_VERSION){
+        response.config.version = CONFIG_VERSION;
+        response.config.state.result = ConfigResult::UNKNOWN_VERSION;
+        response.config.configKey = msg.config.configKey;
+        radio_sendMessage(response, radio_MessageType::CONFIG);
+        return;
+    }
 
+    switch (msg.config.state.operation)
+    {
+    case ConfigOp::READ :
+        response.config.version = CONFIG_VERSION;       
+        response.config.configKey = msg.config.configKey;
+        response.config.value = config_read(msg.config.configKey, 
+                                            msg.config.state.result);
+        radio_sendMessage(response, radio_MessageType::CONFIG);
+        break;
+    case ConfigOp::SET :
+        response.config.version = CONFIG_VERSION;       
+        response.config.configKey = msg.config.configKey;
+        response.config.state.result = 
+            config_set(msg.config.configKey, msg.config.value);
+    default:
+        response.config.version = CONFIG_VERSION;
+        response.config.configKey = (ConfigKey) -1;
+        response.config.state.result = ConfigResult::UNKNOWN_OP;
+        radio_sendMessage(response, radio_MessageType::CONFIG);
+        break;
+    }
 
 }
 

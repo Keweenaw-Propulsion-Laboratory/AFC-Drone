@@ -1,11 +1,7 @@
-/* The purpose of this file will be to hold configurable
-settings. These settings should be stored to non-volitile
-memory in order to persist between system power cycles.
-*/
-
 #pragma once
 #include <cstdint>
 
+extern const uint8_t CONFIG_VERSION;
 /**
  * Config structure in non-volitile memory. 
  * 
@@ -33,9 +29,61 @@ struct __attribute__((packed)) PersistentConfig {
     int8_t motor2offset;
 };
 
+/** Identifies a single persisted setting for config_set(). */
+enum class ConfigKey : uint16_t {
+    TxPowerDbm,
+    UsbRelayEnabled,
+    RadioEnabled,
+    SkipRadioHandshake,
+    GimbalPitchOffset,
+    GimbalYawOffset,
+    Motor1Offset,
+    Motor2Offset,
+};
+
+/**Valid config opperations */
+enum class ConfigOp : uint8_t {
+    READ = 1,
+    SET = 2,
+
+    ZERO_ALL = 255, // Zeros out all config memory.
+};
+
+/** Result of a request to change one persisted setting. */
+enum class ConfigResult : uint8_t {
+    OK,
+    INVALID_VALUE,
+    INVALID_KEY,
+    UNSAFE_STATE,
+    UNKNOWN_VERSION,
+    UNKNOWN_OP
+
+};
+
+union ConfigState {
+    ConfigOp operation;
+    ConfigResult result;
+};
+
 void config_load();
 void config_save();
 const PersistentConfig& config_get();
-PersistentConfig config_mutableGet();
+PersistentConfig& config_mutableGet();
 void restoreDefaults();
 
+/**
+ * Validate, apply, and persist one setting.
+ *
+ * The value is signed so the same interface supports booleans, unsigned
+ * settings, and signed calibration offsets. Boolean values must be 0 or 1.
+ * Configuration is never written while the vehicle is in FLIGHT.
+ */
+ConfigResult config_set(ConfigKey key, int32_t value);
+
+/**
+ * Return one setting using the same int32_t representation accepted by
+ * config_set(). Boolean settings are returned as 0 or 1.
+ * 
+ * @param status returns 0 on success. -1 on failure
+ */
+int32_t config_read(ConfigKey key, ConfigResult& status);
