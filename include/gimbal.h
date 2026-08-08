@@ -13,6 +13,12 @@
 #define YAW_COLS 9
 
 
+extern float gimbal_topServo;
+extern float gimbal_botServo;
+extern float gimbal_pitch;
+extern float gimbal_yaw;
+
+
 
 class Gimbal {
     public: 
@@ -20,21 +26,32 @@ class Gimbal {
 
         static void set(float pitch, float yaw);
 
-        static void setTopServo(float angle);
-        static void setBotServo(float angle);
-
         static void zero();
         static void selfTest();
 
-
     private:
-        static int pitch;
-        static int yaw;
+        static float pitch;
+        static float yaw;
+
 
         static Servo pitchServo;
         static Servo yawServo;
 
         static int limitRange(int val, int low, int high);
+
+        /**
+         * INTERNAL USE ONLY. Manually sets the servo to a point.
+         * 
+         * @warning does not update pitch and yaw set points
+         */
+        static void setTopServo(float angle);
+        
+        /**
+         * INTERNAL USE ONLY. Manually sets the servo to a point.
+         * 
+         * @warning does not update pitch and yaw set points
+         */
+        static void setBotServo(float angle);
 
 
         // MARK: Lookup table for gimbal correction

@@ -1,19 +1,58 @@
 #include "radio.h"
 #include "Arduino.h"
+#include <cstring>
+#include "circular_buffer.h"
 
 #include "error.h"
-#include "debug.h"
+#include "drone.h"
+#include "gimbal.h"
+#include "gyro.h"
+#include "usb.h"
+#include "motor.h"
+
+/** Bool value to skip radio handshake
+ * This should only be used for testing
+ * and debugging.
+ */
+static constexpr bool SKIP_HANDSHAKE = true;
+
+/**
+ * Any radio packet sent out will also be mirrored over USB.
+ */
+static constexpr bool USB_RELAY = true;
+
+/**Minimum time to wait in ms between transmissions */
+constexpr uint32_t RX_WINDOW_MIN = 10;
 
 // Initialize static variables
-RH_RF69 Radio::radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
-uint8_t Radio::packetNum = 0; // Set packet number to zero;
+RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
+uint8_t radioPacketNum = 0; // Set packet number to zero;
+
+int16_t radio_avgRSSI = 0;
+static float rollingRssi = 0.0f;
+static bool rollingRssiInitialized = false;
+
+constexpr float RSSI_ALPHA = 0.1f;
+
+uint32_t lastTxTime = 0; /** Last transmission time */
 
 
+static Circular_Buffer<radio_Packet, 16> radio_tx_buffer; // 16 message tx buffer
+static Circular_Buffer<radio_Packet, 16> radio_rx_buffer; // 16 message rx buffer
 
-Radio::RadioSetupStates Radio::setupState = RESET1;
+radio_SetupStates setupState = radio_SetupStates::RESET1;
 
 int retryCounter = 0;
 
+void radio_handleCommand(radio_Message msg);
+void radio_handleConfig(radio_Message msg);
+void radio_handleSetup(radio_Message msg);
+
+/** Adds message to radio queue */
+void radio_sendMessage(radio_Message data, radio_MessageType type);
+
+
+// MARK: Setup
 /**
  * Performs setup on the radio module.
  * 
@@ -21,51 +60,51 @@ int retryCounter = 0;
  * Will return false if an error occured. All errors should
  * be treated as fatal
  */
-bool Radio::setup() {
+bool radio_setup() {
 
     // A variable to help with timing during the setup process
     static uint32_t setupTimmer;
 
     switch (setupState) {
-        case RadioSetupStates::RESET1 :
+        case radio_SetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
                 // Run reset sequence
                 digitalWrite(RFM69_RST, HIGH);
 
                 setupTimmer = millis();
 
-                setupState = RESET2;
+                setupState = radio_SetupStates::RESET2;
                 return true;
             break;
         
-        case RadioSetupStates::RESET2 :
+        case radio_SetupStates::RESET2 :
             if (millis() > (setupTimmer + 10)){
                 digitalWrite(RFM69_RST, LOW);
             }
 
             if (millis() > setupTimmer + 20){
-                setupState = RADIO_INIT;
-                Debug::println("Radio Reset");
+                setupState = radio_SetupStates::RADIO_INIT;
+                usb_send_text("Radio Reset", 11);
             }
             return true;
 
             break;
         
-        case RadioSetupStates::RADIO_INIT :
+        case radio_SetupStates::RADIO_INIT :
             if( !radio.init() ) {
                 ErrorHandler::addError(ErrorHandler::radioInitFail);
-                Debug::println("Radio start failed");
+                usb_send_text("Radio start failed", 18);
                 return false;
             }
 
-            setupState = SET_CONFIG;
+            setupState = radio_SetupStates::SET_CONFIG;
             return true;
             break;
 
-        case RadioSetupStates::SET_CONFIG : {
+        case radio_SetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-                    Debug::println("failed to set radio freq");
+                    usb_send_text("failed to set radio freq", 24);
                     return false;
                 }
 
@@ -78,48 +117,58 @@ bool Radio::setup() {
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
                 
-                setupState = SEND_CONN;
+                setupState = radio_SetupStates::SEND_CONN;
                 return true;
         }
             break;
         
-        case RadioSetupStates::SEND_CONN : {
-            setupTimmer = millis(); // Record time of sent connection ping
-            uint8_t testMessage[] = "Hello Houghton. This is AFCDrone";
-            sendMessage(testMessage, sizeof(testMessage), MessageType::SETUP);
+        case radio_SetupStates::SEND_CONN : {
+            
+            if (SKIP_HANDSHAKE) {
+                setupState = radio_SetupStates::COMPLETE;
+                return true;
+            }
 
-            setupState = WAIT_ACK;
+            setupTimmer = millis(); // Record time of sent connection ping
+            
+            radio_Message conn;
+            memcpy(conn.textArray, "AFCDrone", 8);
+
+            radio_sendMessage(conn, radio_MessageType::SETUP);
+            
+            setupState = radio_SetupStates::WAIT_ACK;
             return true;
         
         break;
         }
-        case RadioSetupStates::WAIT_ACK : {
+        case radio_SetupStates::WAIT_ACK : {
             
-            // Check for ack
-            uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
-            uint8_t buffLength;
+            // // Check for ack
+            // uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
+            // uint8_t buffLength;
 
-            // Check if there is an ack waiting
-            if (!getMessage(recvBuffer, buffLength)) {
-                // Go back to sending a message if the ack hasnt been received after 1 second
-                if(millis() > setupTimmer + 1000) {
-                    setupTimmer = millis();
-                    Debug::print("BaseStation not connected. Retrying... #");
-                    Debug::println(retryCounter++);
+            
+            // // Check if there is an ack waiting
+            // if (!radio_getMessage(recvBuffer, buffLength)) {
+            //     // Go back to sending a message if the ack hasnt been received after 1 second
+            //     if(millis() > setupTimmer + 1000) {
+            //         setupTimmer = millis();
+            //         usb_send_text("BaseStation not connected. Retrying... #", 40);
+            //         // Debug::println(retryCounter++);
 
-                    setupState = SEND_CONN;
-                }
-                return true; // Return back to loop
-            }
+            //         setupState = radio_SetupStates::SEND_CONN;
+            //     }
+            //     return true; // Return back to loop
+            // }
 
-            // Check if correct ack was recieved 
-            if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
-                // Update state to complete the radio init
-                Debug::println("BaseStation CONNECTED");
+            // // Check if correct ack was recieved 
+            // if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
+            //     // Update state to complete the radio init
+            //     usb_send_text("BaseStation CONNECTED", 21);
                 
-                setupState = COMPLETE;
-                return true;
-            }
+            //     setupState = radio_SetupStates::COMPLETE;
+            //     return true;
+            // }
             // Return to loop
             return true;
             break;
@@ -132,24 +181,235 @@ bool Radio::setup() {
 
 }
 
-bool Radio::setupComplete() {
-    return setupState == COMPLETE;
+bool radio_setupComplete() {
+    return setupState == radio_SetupStates::COMPLETE;
 }
 
-void Radio::sendMessage(uint8_t data[], uint8_t dataSize, MessageType type) {
-    radio.waitPacketSent(); // Wait for any previous packet to be sent
+// MARK: Periodic Update
+void radio_update() {
+    // Get current time;
+    uint32_t now = millis();
 
-    radio.setHeaderId(packetNum); // Set the packet Id to the current packet number
-    radio.setHeaderFlags(type); // Set the flags to the type of message.
+    // Only run radio if setup has been completed. 
+    if (radio_setupComplete()) {
 
-    radio.send(data, dataSize); // Send the data
+        // Check if radio has available packets
+        if (radio.available()) {
+            uint8_t buffer[RH_RF69_MAX_MESSAGE_LEN];
+            uint8_t len = sizeof(buffer);
+
+            if( radio.recv(buffer, &len) ) { // Get message from radio
+                int16_t newRssi = radio.lastRssi();
+
+                if (!rollingRssiInitialized) {
+                    rollingRssi = static_cast<float>(newRssi);
+                    rollingRssiInitialized = true;
+                } else {
+                    rollingRssi += RSSI_ALPHA *
+                                (static_cast<float>(newRssi) - rollingRssi);
+                }
+
+                radio_avgRSSI = static_cast<int16_t>(roundf(rollingRssi));
+                
+                // Save the headers
+                uint8_t currentPacketNum = radio.headerId();
+                uint8_t messageType = radio.headerFlags();
+
+                // TODO implement packet counting and error checking
+                if (currentPacketNum != radioPacketNum + 1){
+
+                }
+
+                // Copy the data from the message
+                radio_Header header = {currentPacketNum, messageType};
+                radio_Message msg{};
+                if (len != sizeof(msg)) {
+                    return;
+                }
+                memcpy(&msg, buffer, sizeof(msg));
+
+                if (USB_RELAY) {
+                    usb_radio_relay(msg, static_cast<radio_MessageType>(header.packetType),
+                                    header.msgNum, usb_radio_direction::RECEIVED);
+                }
+
+                switch (static_cast<radio_MessageType>(header.packetType))
+                {
+                case radio_MessageType::SETUP :
+                    /* code */
+                    break;
+                
+                case radio_MessageType::COMMAND :
+                    radio_handleCommand(msg);
+                    break;
+
+                case radio_MessageType::CONFIG :
+                
+                default:
+                    break;
+                }
+
+            }
+
+        }
+
+        // Check if radio is busy. If yes wait
+        if (radio.mode() == RHGenericDriver::RHModeTx) return;
+
+        // Check if listen window has been open long enough
+        if (now - lastTxTime < RX_WINDOW_MIN) {
+            if (radio.mode() != RHGenericDriver::RHModeRx) {
+                radio.setModeRx();
+            }
+            return;
+        }
+
+        // Send one message from the outgoing buffer
+        radio_Packet packet;
+        if (radio_tx_buffer.size() != 0) {
+            packet = radio_tx_buffer.pop_front();
+
+            radio_Header header{ radioPacketNum++, static_cast<uint8_t>(packet.type) };
+
+            uint8_t frame[sizeof(radio_Message)];
+            memcpy(frame, &packet.message, sizeof(radio_Message));
+
+            radio.setHeaderId(header.msgNum);
+            radio.setHeaderFlags(header.packetType);
+
+            radio.send(frame, sizeof(frame)); // Non-blocking transmit start
+            if (USB_RELAY) {
+                usb_radio_relay(packet.message, packet.type, header.msgNum,
+                                usb_radio_direction::SENT);
+            }
+            lastTxTime = now;
+        }
+
+
+    }
 }
 
-/**
- * @return Will return true when there is a message. 
- * Will return false if there is no message available.
- */
-bool Radio::getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
+/** Adds message to radio queue */
+void radio_sendMessage(radio_Message data, radio_MessageType type) {
+    radio_tx_buffer.push_back({data, type});
+}
+
+// MARK: Status Senders
+
+void radio_sendStatus0() {
+    radio_Message msg{};
+
+    msg.status0.loopTimeAvg = drone_rollAvg;
+    msg.status0.loopTimeMax = Drone::worstTime;
+    msg.status0.RunTime = millis() / 1000;
+    msg.status0.rssi = radio_avgRSSI;
+    msg.status0.currentMode = (uint8_t) Drone::state;
+
+    radio_sendMessage( msg, radio_MessageType::STATUS0);
+}
+
+void radio_sendStatus1() {
+    radio_Message msg{};
+
+    msg.status1.gimbalPitchNorm = gimbal_pitch;
+    msg.status1.gimbalYawNorm = gimbal_yaw;
+    msg.status1.topServoSet = gimbal_topServo;
+    msg.status1.bottomServoSet = gimbal_botServo;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS1);
+}
+
+void radio_sendStatus2() {
+    radio_Message msg{};
+    
+    msg.status2.motor1set = motor_bottomSetSpeed;
+    msg.status2.motor2set = motor_topSetSpeed;
+    msg.status2.voltage = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS2);
+
+}
+
+void radio_sendStatus3() {
+    radio_Message msg{};
+
+    msg.status3.qI = 0;
+    msg.status3.qJ = 0;
+    msg.status3.qK = 0;
+    msg.status3.qR = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS3);
+}
+
+void radio_sendStatus4() {
+    radio_Message msg{};
+
+    msg.status4.accelX = 0;
+    msg.status4.accelY = 0;
+    msg.status4.accelZ = 0;
+    msg.status4.empty = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS4);
+
+}
+
+void radio_sendStatus5() {
+    radio_Message msg{};
+
+    msg.status5.velX = 0;
+    msg.status5.velY = 0;
+    msg.status5.velZ = 0;
+    msg.status5.empty = 0;
+
+    radio_sendMessage(msg, radio_MessageType::STATUS5);
+
+}
+
+void radio_sendStatus6() {
+    radio_Message msg{};
+
+    msg.status6.posX = 0;
+    msg.status6.posY = 0;
+    msg.status6.posZ = 0;
+    msg.status6.empty = 0;
+    
+    radio_sendMessage(msg, radio_MessageType::STATUS6);
+}
+
+// MARK: Message Handlers
+
+void radio_handleCommand(radio_Message msg) {
+
+// Sets a target position
+    if (msg.command.flags.targSlot == 0) {
+        drone_targ0.gimbalX = msg.command.gimbalX;
+        drone_targ0.gimbalY = msg.command.gimbalY;
+        drone_targ0.motor0Speed = msg.command.motor0Speed;
+        drone_targ0.motor1Speed = msg.command.motor1Speed;
+    } else {
+        drone_targ1.gimbalX = msg.command.gimbalX;
+        drone_targ1.gimbalY = msg.command.gimbalY;
+        drone_targ1.motor0Speed = msg.command.motor0Speed;
+        drone_targ1.motor1Speed = msg.command.motor1Speed;
+    }
+
+    drone_activeSlot = msg.command.flags.activeSlot;
+
+}
+
+void radio_handleConfig(radio_Message msg) {
+
+
+}
+
+void radio_handleSetup(radio_Message msg) {
+
+
+}
+
+// MARK: Radio helpers
+[[maybe_unused]]
+static bool radio_getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                         , uint8_t& bufferLength ) {
 
     // If radio has no message return false

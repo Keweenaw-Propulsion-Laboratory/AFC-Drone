@@ -1,6 +1,5 @@
 #include "gyro.h"
-#include "debug.h"
-
+#include "usb.h"
 
 Adafruit_BNO08x Gyro::gyro(GYRO_RESET);
 Gyro::euler_t Gyro::ypr;
@@ -14,14 +13,14 @@ bool Gyro::setup() {
     case Gyro::GyroSetupStates::I2C :
         if (! gyro.begin_I2C()) {
             // TODO add error
-            Debug::println("Gyro I2C failed");
+            usb_send_text("Gyro I2C failed", 15);
             return false;
         }
         state = EnableReport;
         break;
     
     case Gyro::GyroSetupStates::EnableReport :
-        Debug::println("BN0085 connected");
+        usb_send_text("BN0085 connected", 16);
         /*
         This section of the setup determines what kind of data we want to 
         get from the Gyro. The different report types can be found at the link below
@@ -29,10 +28,10 @@ bool Gyro::setup() {
 
         */
         if (! gyro.enableReport(SH2_ARVR_STABILIZED_RV, 10000)) { // 100 hz
-            Debug::println("Could not enable stabilized remote vector");
+            usb_send_text("Could not enable stabilized remote vector", 41);
             return false;
         }
-        Debug::println("Gyro Complete");
+        usb_send_text("Gyro Complete", 13);
         state = Complete;
         break;  
     default:

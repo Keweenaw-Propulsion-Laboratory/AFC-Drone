@@ -1,12 +1,26 @@
 #define STATUS_LED 10
+#include <cstdint>
 
+struct Target_t {
+    int16_t gimbalX;
+    int16_t gimbalY;
+    uint8_t motor0Speed;
+    uint8_t motor1Speed;
+};
+
+extern Target_t drone_targ0;
+extern Target_t drone_targ1;
+extern bool drone_activeSlot;
+
+extern uint16_t drone_rollAvg;
 
 class Drone {
     public:
-    enum class DroneStates {
+    enum class DroneStates: uint8_t {
         BOOT, 
         RADIO_SETUP,  
         SENSOR_SETUP,
+        CONTROL_SETUP,
         READY_ARMED,
         FLIGHT,
         FAULT_ERROR
@@ -27,10 +41,14 @@ class Drone {
      */
     static void update();
 
+        static uint16_t lastLoopTime; // How long did the last loop take.
+        static uint16_t worstTime; // Keep track of our worst case loop time
+        static uint16_t bestTime; // Keep track of our best case loop time
+        static DroneStates state; // The current state of the Drone
 
     private:
-        static DroneStates state; // The current state of the Drone
         static bool hasSerial; // Is there a USB Serial connection to debug with
+
 
         static void updateLEDS();
         static void ledFader();
