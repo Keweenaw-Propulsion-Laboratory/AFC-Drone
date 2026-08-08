@@ -45,6 +45,7 @@ enum class ConfigKey : uint16_t {
 enum class ConfigOp : uint8_t {
     READ = 1,
     SET = 2,
+    READ_RESPONSE = 0x81,
     SET_RESPONSE = 0x82,
 
     ZERO_ALL = 255, // Zeros out all config memory.

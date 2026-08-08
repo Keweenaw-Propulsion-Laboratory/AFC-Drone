@@ -109,12 +109,27 @@ struct __attribute__((packed)) usb_config_response {
     usb_config_status statuses[9];
 };
 
+struct __attribute__((packed)) usb_config_read_status {
+    ConfigKey key;
+    ConfigResult result;
+    int32_t value;
+};
+
+struct __attribute__((packed)) usb_config_read_response {
+    uint8_t version;
+    ConfigOp operation;
+    uint8_t length;
+    ConfigResult result; // Request-level status
+    usb_config_read_status statuses[8];
+};
+
 union __attribute__((packed)) usb_message_t {
     uint8_t raw[MAX_DATA_LEN];
     usb_command_t command;
     usb_telemetry_t telemetry;
     usb_config config;
     usb_config_response configResponse;
+    usb_config_read_response configReadResponse;
     radio_Message radio_message;
     
 };
@@ -150,6 +165,8 @@ static_assert(sizeof(usb_telemetry_t) <= MAX_DATA_LEN, "Telemetry exceeds USB pa
 static_assert(sizeof(usb_radio_packet_t) == 11, "USB radio relay wire size changed");
 static_assert(sizeof(usb_config) == MAX_DATA_LEN, "USB config request layout changed");
 static_assert(sizeof(usb_config_response) == 31, "USB config response layout changed");
+static_assert(sizeof(usb_config_read_response) == MAX_DATA_LEN,
+              "USB config read response layout changed");
 
 
 
@@ -425,16 +442,56 @@ static void usb_handleConfig(const usb_message_t& msg, uint8_t packetLength) {
         return;
     }
 
+    const uint8_t entryCount = msg.config.length;
+    const uint8_t expectedLength = CONFIG_HEADER_SIZE + entryCount * CONFIG_ENTRY_SIZE;
+    if (entryCount == 0 || packetLength != expectedLength) {
+        response.configResponse.result = ConfigResult::INVALID_VALUE;
+        usb_send(response, usb_message_types::CONFIG, 4);
+        return;
+    }
+
+    if (msg.config.state.operation == ConfigOp::READ) {
+        constexpr uint8_t MAX_READ_CONFIG_ENTRIES = 8;
+        usb_message_t readResponse{};
+        readResponse.configReadResponse.version = CONFIG_VERSION;
+        readResponse.configReadResponse.operation = ConfigOp::READ_RESPONSE;
+        readResponse.configReadResponse.length = 0;
+        readResponse.configReadResponse.result = ConfigResult::OK;
+
+        if (entryCount > MAX_READ_CONFIG_ENTRIES) {
+            readResponse.configReadResponse.result = ConfigResult::INVALID_VALUE;
+            usb_send(readResponse, usb_message_types::CONFIG, 4);
+            return;
+        }
+
+        const uint8_t* data = msg.raw + CONFIG_HEADER_SIZE;
+        for (uint8_t i = 0; i < entryCount; ++i) {
+            const size_t offset = static_cast<size_t>(i) * CONFIG_ENTRY_SIZE;
+            const uint16_t rawKey = static_cast<uint16_t>(data[offset]) |
+                (static_cast<uint16_t>(data[offset + 1]) << 8);
+            ConfigResult result = ConfigResult::OK;
+            const ConfigKey key = static_cast<ConfigKey>(rawKey);
+
+            readResponse.configReadResponse.statuses[i].key = key;
+            readResponse.configReadResponse.statuses[i].value =
+                config_read(key, result);
+            readResponse.configReadResponse.statuses[i].result = result;
+        }
+
+        readResponse.configReadResponse.length = entryCount;
+        const uint8_t responseLength = 4 +
+            entryCount * sizeof(usb_config_read_status);
+        usb_send(readResponse, usb_message_types::CONFIG, responseLength);
+        return;
+    }
+
     if (msg.config.state.operation != ConfigOp::SET) {
         response.configResponse.result = ConfigResult::UNKNOWN_OP;
         usb_send(response, usb_message_types::CONFIG, 4);
         return;
     }
 
-    const uint8_t entryCount = msg.config.length;
-    const uint8_t expectedLength = CONFIG_HEADER_SIZE + entryCount * CONFIG_ENTRY_SIZE;
-    if (entryCount == 0 || entryCount > MAX_CONFIG_ENTRIES ||
-        packetLength != expectedLength) {
+    if (entryCount > MAX_CONFIG_ENTRIES) {
         response.configResponse.result = ConfigResult::INVALID_VALUE;
         usb_send(response, usb_message_types::CONFIG, 4);
         return;

@@ -39,6 +39,9 @@ The flight software is divided into several subsystem-focused modules.
 
 The `Drone` class coordinates the individual subsystems and tracks the overall state of the vehicle.
 
+For the binary USB and RFM69 endpoint reference used by dashboard clients, see
+[Dashboard Protocol Reference](docs/dashboard-protocol.md).
+
 ---
 
 ## System States
@@ -199,6 +202,56 @@ General system telemetry is intended to report:
 Several telemetry messages are defined but are not yet fully populated by the current firmware.
 
 See the Radio API documentation for the detailed packet and payload definitions.
+
+---
+
+## Persistent Configuration
+
+Configuration values are retained in EEPROM and are loaded during startup. All
+configuration commands use a signed 32-bit integer value; boolean values use
+`0` for disabled and `1` for enabled. A value outside its accepted range is
+rejected with `INVALID_VALUE`. Configuration changes are rejected while the
+vehicle is in `FLIGHT`.
+
+| Key | Current wire ID | Accepted value | Default | Effect |
+| --- | ---: | --- | ---: | --- |
+| `TxPowerDbm` | 0 | 14–20 | 20 | RFM69 transmit power in dBm. |
+| `UsbRelayEnabled` | 1 | 0 or 1 | 1 | Enables USB communication handling. |
+| `RadioEnabled` | 2 | 0 or 1 | 1 | Enables periodic radio processing. |
+| `SkipRadioHandshake` | 3 | 0 or 1 | 1 | Skips the radio connection handshake when enabled. |
+| `GimbalPitchOffset` | 4 | 60–120 | 90 | Pitch-servo center/setpoint offset in degrees. |
+| `GimbalYawOffset` | 5 | 60–120 | 89 | Yaw-servo center/setpoint offset in degrees. |
+| `Motor1Offset` | 6 | −100–100 | 0 | Top-motor speed adjustment. |
+| `Motor2Offset` | 7 | −100–100 | 0 | Bottom-motor speed adjustment. |
+
+The USB configuration request uses a 16-bit little-endian key and a 32-bit
+little-endian signed value for each entry. A `SET` request can contain up to
+nine `{key, value}` entries; the controller applies all valid entries, writes
+EEPROM at most once, and replies with one status entry per requested key.
+
+A `READ` request uses the same entry layout, but ignores each entry's value and
+can request up to eight keys. The `READ_RESPONSE` contains `{key, status,
+value}` for each requested key. Eight read results exactly fill the 60-byte USB
+payload limit.
+
+### Radio Configuration Packets
+
+Radio configuration uses `radio_MessageType::CONFIG` (`9`) and carries one
+configuration value per 8-byte packet. It uses the same keys, accepted values,
+and integer representation listed above.
+
+| Byte | Field | Request meaning |
+| ---: | --- | --- |
+| 0 | `version` | Must equal `CONFIG_VERSION` (currently `1`). |
+| 1 | `state.operation` | `READ` (`1`) or `SET` (`2`). |
+| 2–3 | `configKey` | `ConfigKey` as a 16-bit little-endian value. |
+| 4–7 | `value` | 32-bit little-endian value. It is ignored for `READ`; it is the requested signed configuration value for `SET`. |
+
+The drone responds using the same `CONFIG` message type. Response byte 1 is a
+`ConfigResult` status, and a successful `READ` response returns the current
+value in bytes 4–7. Because the radio payload is fixed at eight bytes, batch
+configuration is available only over USB; send one radio packet for each
+configuration key.
 
 ---
 
