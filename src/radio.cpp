@@ -114,7 +114,7 @@ bool radio_setup() {
                                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08};
                 radio.setEncryptionKey(key);  
 
-                radio.setTxPower(20, true); // 20 dbm , Enable high power antenna.
+                radio.setTxPower(config_get().txPowerDbm, true); // 20 dbm , Enable high power antenna.
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
                 
@@ -125,7 +125,7 @@ bool radio_setup() {
         
         case radio_SetupStates::SEND_CONN : {
             
-            if (SKIP_HANDSHAKE) {
+            if (config_get().skipRadioHandshake) {
                 setupState = radio_SetupStates::COMPLETE;
                 return true;
             }

@@ -34,6 +34,7 @@ PersistentConfig defaults() {
         0, // CRC
         true, // USB enabled
         true, // Radio enabled
+        true, // Skip radio handshake
         90,89, // Gimbal Offset
         0, 0, // Motor Offset
                
@@ -68,23 +69,40 @@ void config_load() {
     PersistentConfig stored{};
     EEPROM.get(EEPROM_ADDRESS, stored);
 
+    // If configs are valid load values
     if (stored.magic == CONFIG_MAGIC && 
         stored.version == CONFIG_VERSION ) {
         config = stored;
+
+    // Else if the version is wrong initiate migration
+    } else if (stored.version != CONFIG_VERSION) {
+        config_migrate(stored);
     } else {
+    // If values are unrecoverable reset to defaults. 
         config = defaults();
         config_save();
     }
 }
 
 const PersistentConfig& config_get() {
+    
     return config;
 }
 
-PersistentConfig config_mutableGet() {
-    PersistentConfig temp;
+PersistentConfig config_mutableGet() {   
+    return config;
+}
 
-    memcpy(&temp, &config, sizeof(config));
-    
-    return temp;
+static void config_migrate(PersistentConfig& stored) {
+    switch (stored.version) {
+
+        case (0):
+        default: 
+            // If there is no valid version migration, reset to defaults
+           stored = defaults();
+        break;
+    }
+
+    // Save migrated configs
+    config_save();
 }

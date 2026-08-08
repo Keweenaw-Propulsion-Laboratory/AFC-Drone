@@ -6,6 +6,16 @@ memory in order to persist between system power cycles.
 #pragma once
 #include <cstdint>
 
+/**
+ * Config structure in non-volitile memory. 
+ * 
+ * All configs should be loaded upon boot and any changes be saved before or 
+ * after fllight. Writing to EEPROM initiates a blocked call which will stall
+ * the control loop while it is running.
+ * 
+ * Any changes to this structure must be added to the migration command
+ * and the current version incremented.  
+ */
 struct __attribute__((packed)) PersistentConfig {
     // Config verification
     uint32_t magic; // = AERE
@@ -16,6 +26,7 @@ struct __attribute__((packed)) PersistentConfig {
     uint8_t txPowerDbm;
     bool usbRelayEnabled;
     bool radioEnabled;
+    bool skipRadioHandshake;
     int16_t gimbalPitchOffset;
     int16_t gimbalYawOffset;
     int8_t motor1offset;
