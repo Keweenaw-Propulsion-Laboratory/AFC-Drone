@@ -1,7 +1,9 @@
 #include "gimbal.h"
 
 #include "Servo.h"
+#include "configs.h"
 #include "Arduino.h"
+
 
 #define PITCH_ZERO 90 // Degrees. Some difference in these is normal to account for tooth placement. 
 #define YAW_ZERO 89 // Degrees. Some difference in these is normal to account for tooth placement
@@ -93,7 +95,7 @@ void Gimbal::set(float pitch, float yaw) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setTopServo(float angle) {
-    gimbal_topServo = limitRange(angle + PITCH_ZERO, 60 , 120);
+    gimbal_topServo = limitRange(angle + config_get().gimbalPitchOffset, 60 , 120);
 
     pitchServo.write(gimbal_topServo);   
 }
@@ -104,7 +106,7 @@ void Gimbal::setTopServo(float angle) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void Gimbal::setBotServo(float angle) {
-    gimbal_botServo = limitRange( -angle + YAW_ZERO, 60, 120);
+    gimbal_botServo = limitRange( -angle + config_get().gimbalYawOffset, 60, 120);
     yawServo.write(gimbal_botServo);
 }
 

@@ -8,6 +8,7 @@ between the Drone and a pysically connected Serial terminal
 #include "radio.h"
 #include "gimbal.h"
 #include "motor.h"
+#include "configs.h"
 
 #include "Arduino.h"
 #include "circular_buffer.h"
@@ -151,7 +152,7 @@ static bool usb_is_valid_rx_header(const usb_header_t& header) {
  */
 void usb_update() {
 
-    if (!Serial) {
+    if (!Serial && !config_get().usbRelayEnabled) {
         return;
     }
 

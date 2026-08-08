@@ -9,6 +9,7 @@
 #include "gyro.h"
 #include "usb.h"
 #include "motor.h"
+#include "configs.h"
 
 /** Bool value to skip radio handshake
  * This should only be used for testing
@@ -187,6 +188,9 @@ bool radio_setupComplete() {
 
 // MARK: Periodic Update
 void radio_update() {
+    if (!config_get().radioEnabled)
+        return;
+
     // Get current time;
     uint32_t now = millis();
 

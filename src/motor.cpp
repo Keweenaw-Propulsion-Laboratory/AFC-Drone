@@ -1,6 +1,7 @@
 #include "motor.h"
 #include "Arduino.h"
 #include "Servo.h"
+#include "configs.h"
 
 static constexpr int BOTTOM_MOTOR_PIN = 29;
 static constexpr int TOP_MOTOR_PIN = 28;
@@ -26,24 +27,24 @@ void motor_setup() {
 
 void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
-    motor_topSetSpeed = topMotorSpeed;
-    motor_bottomSetSpeed = bottomMotorSpeed;
+    motor_topSetSpeed = topMotorSpeed + config_get().motor1offset;
+    motor_bottomSetSpeed = bottomMotorSpeed + config_get().motor2offset;
     
     uint16_t bottomSpeed =
         ESC_MIN_RUNNING +
-        ((uint32_t)bottomMotorSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
+        ((uint32_t)motor_bottomSetSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
 
     uint16_t topSpeed =
         ESC_MIN_RUNNING +
-        ((uint32_t) topMotorSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
+        ((uint32_t) motor_topSetSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
 
  
     // If motors are suppose to be off set to min armed value
-    if (bottomMotorSpeed == 0) {
+    if (motor_bottomSetSpeed == 0) {
         bottomSpeed = ESC_MIN_US;
     }
 
-    if (topMotorSpeed == 0) {
+    if (motor_topSetSpeed == 0) {
         topSpeed = ESC_MIN_US;
     }
 
