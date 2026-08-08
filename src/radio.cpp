@@ -242,6 +242,7 @@ void radio_update() {
                     break;
 
                 case radio_MessageType::CONFIG :
+                    radio_handleConfig(msg);
                 
                 default:
                     break;
