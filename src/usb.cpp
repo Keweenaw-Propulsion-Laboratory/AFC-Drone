@@ -18,6 +18,14 @@ static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
 static constexpr size_t USB_FRAME_OVERHEAD = 2 + 1 + 4 + 2;
 
+// Identify handshake: the dashboard sends RAW+IDENTIFY_QUERY_BYTE on every
+// fresh connection to tell a direct-wired drone apart from a base station
+// relay without the user picking a mode manually. See also
+// AFCDrone_BaseStation/src/main.cpp, which answers the same query with
+// DEVICE_KIND_BASE_STATION_RELAY.
+static constexpr uint8_t IDENTIFY_QUERY_BYTE = 0x3f;
+static constexpr uint8_t DEVICE_KIND_DRONE_DIRECT = 0x01;
+
 struct __attribute__((packed)) usb_command_t {
     struct __attribute__((packed)) flags {
         uint8_t targSlot : 1; /**The slot to be configured */
@@ -178,6 +186,7 @@ static Circular_Buffer<usb_packet_t, 16> usb_rx_buffer;
 static uint16_t usb_global_packet_number = 0;
 
 static void usb_handleConfig(const usb_message_t& msg, uint8_t packetLength);
+static void usb_send(usb_message_t data, usb_message_types type, int length);
 
 static uint16_t usb_crc16_update(uint16_t crc, uint8_t value) {
     crc ^= static_cast<uint16_t>(value) << 8;
@@ -203,6 +212,10 @@ static uint16_t usb_packet_crc(const usb_packet_t& packet) {
 static bool usb_is_valid_rx_header(const usb_header_t& header) {
     if (header.type == usb_message_types::COMMAND) {
         return header.packetLength == sizeof(usb_command_t);
+    }
+
+    if (header.type == usb_message_types::RAW) {
+        return header.packetLength == 1;
     }
 
     return header.type == usb_message_types::CONFIG &&
@@ -314,6 +327,14 @@ void usb_update() {
         
         switch (pkt.header.type) {
 
+        case usb_message_types::RAW :
+            if (pkt.header.packetLength == 1 && pkt.data.raw[0] == IDENTIFY_QUERY_BYTE) {
+                usb_message_t reply{};
+                reply.raw[0] = DEVICE_KIND_DRONE_DIRECT;
+                usb_send(reply, usb_message_types::RAW, 1);
+            }
+            break;
+
         case usb_message_types::COMMAND :
         
             if (pkt.data.command.flags.targSlot == 0) {
@@ -331,6 +352,7 @@ void usb_update() {
             drone_activeSlot = pkt.data.command.flags.activeSlot;
 
             // Send back an ACK
+            break;
 
         case usb_message_types::CONFIG:
             usb_handleConfig(pkt.data, pkt.header.packetLength);

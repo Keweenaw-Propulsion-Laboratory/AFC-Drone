@@ -11,11 +11,6 @@
 #include "motor.h"
 #include "configs.h"
 
-/**
- * Any radio packet sent out will also be mirrored over USB.
- */
-static constexpr bool USB_RELAY = true;
-
 /**Minimum time to wait in ms between transmissions */
 constexpr uint32_t RX_WINDOW_MIN = 10;
 
@@ -226,7 +221,7 @@ void radio_update() {
                 }
                 memcpy(&msg, buffer, sizeof(msg));
 
-                if (USB_RELAY) {
+                if (config_get().usbRelayEnabled) {
                     usb_radio_relay(msg, static_cast<radio_MessageType>(header.packetType),
                                     header.msgNum, usb_radio_direction::RECEIVED);
                 }
@@ -278,7 +273,7 @@ void radio_update() {
             radio.setHeaderFlags(header.packetType);
 
             radio.send(frame, sizeof(frame)); // Non-blocking transmit start
-            if (USB_RELAY) {
+            if (config_get().usbRelayEnabled) {
                 usb_radio_relay(packet.message, packet.type, header.msgNum,
                                 usb_radio_direction::SENT);
             }
@@ -411,17 +406,19 @@ void radio_handleConfig(radio_Message msg) {
     switch (msg.config.state.operation)
     {
     case ConfigOp::READ :
-        response.config.version = CONFIG_VERSION;       
+        response.config.version = CONFIG_VERSION;
         response.config.configKey = msg.config.configKey;
-        response.config.value = config_read(msg.config.configKey, 
-                                            msg.config.state.result);
+        response.config.value = config_read(msg.config.configKey,
+                                            response.config.state.result);
         radio_sendMessage(response, radio_MessageType::CONFIG);
         break;
     case ConfigOp::SET :
-        response.config.version = CONFIG_VERSION;       
+        response.config.version = CONFIG_VERSION;
         response.config.configKey = msg.config.configKey;
-        response.config.state.result = 
+        response.config.state.result =
             config_set(msg.config.configKey, msg.config.value);
+        radio_sendMessage(response, radio_MessageType::CONFIG);
+        break;
     default:
         response.config.version = CONFIG_VERSION;
         response.config.configKey = (ConfigKey) -1;
