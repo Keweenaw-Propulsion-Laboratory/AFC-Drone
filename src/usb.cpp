@@ -9,6 +9,7 @@ between the Drone and a pysically connected Serial terminal
 #include "gimbal.h"
 #include "motor.h"
 #include "configs.h"
+#include "gyro.h"
 
 #include "Arduino.h"
 #include "circular_buffer.h"
@@ -428,21 +429,21 @@ void usb_send_telemetry() {
     tx_message.telemetry.motor1Set = motor_bottomSetSpeed;
     tx_message.telemetry.motor2Set = motor_topSetSpeed;
     tx_message.telemetry.voltage = 0;
-    tx_message.telemetry.qR = 0;
-    tx_message.telemetry.qI = 0;
-    tx_message.telemetry.qJ = 0;
-    tx_message.telemetry.qK = 0;
-    tx_message.telemetry.accelX = 0;
-    tx_message.telemetry.accelY = 0;
-    tx_message.telemetry.accelZ = 0;
-    tx_message.telemetry.velX = 0;
-    tx_message.telemetry.velY = 0;
-    tx_message.telemetry.velZ = 0;
-    tx_message.telemetry.posX = 0;
-    tx_message.telemetry.posY = 0;
-    tx_message.telemetry.posZ = 0;
-    tx_message.telemetry.latitude = 38.78152975539397f;
-    tx_message.telemetry.longitude = -90.49115790740485f;
+    tx_message.telemetry.qR = radio_floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qI = radio_floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qJ = radio_floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qK = radio_floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
+    tx_message.telemetry.accelX = radio_floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelY = radio_floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelZ = radio_floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.velX = radio_floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
+    tx_message.telemetry.velY = radio_floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
+    tx_message.telemetry.velZ = radio_floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
+    tx_message.telemetry.posX = radio_floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
+    tx_message.telemetry.posY = radio_floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
+    tx_message.telemetry.posZ = radio_floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
+    tx_message.telemetry.latitude = 47.119643352372485f;
+    tx_message.telemetry.longitude = -88.549229750287f;
 
     usb_send(tx_message, usb_message_types::TELEMETRY, sizeof(usb_telemetry_t));
 }

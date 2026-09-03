@@ -13,7 +13,10 @@ extern const uint8_t CONFIG_VERSION;
  * and the current version incremented.  
  */
 struct __attribute__((packed)) PersistentConfig {
-    // Config verification
+    /* Config Verification 
+    This is used when loading from flash to verify that the data is 
+    valid and not corrupted.*/
+
     uint32_t magic; // = AERE
     uint16_t version; // Current config version. Use for migration
     uint16_t crc; // Checksum
@@ -29,8 +32,9 @@ struct __attribute__((packed)) PersistentConfig {
     int8_t motor2offset;
 };
 
-/** Identifies a single persisted setting for config_set(). */
+/** Identifies a single config setting for config_set(). */
 enum class ConfigKey : uint16_t {
+    DebugMode,
     TxPowerDbm,
     UsbRelayEnabled,
     RadioEnabled,
@@ -62,6 +66,11 @@ enum class ConfigResult : uint8_t {
 
 };
 
+/**
+ * Union of the Config opperation and the result. 
+ * 
+ * Combines the enum values
+ */
 union ConfigState {
     ConfigOp operation;
     ConfigResult result;
@@ -72,10 +81,29 @@ struct ConfigUpdate {
     int32_t value;
 };
 
+/**
+ * Load saved configs from the non-volitile flash. 
+ */
 void config_load();
+
+/**
+ * Save configs to the non-voltile flash.
+ */
 void config_save();
+
+/**
+ * Helper command to return a snapshot of the config struct
+ */
 const PersistentConfig& config_get();
+
+/**
+ * Helper command to return the current editable config struct.
+ */
 PersistentConfig& config_mutableGet();
+
+/**
+ * Helper command to set all values back to default.
+ */
 void restoreDefaults();
 
 /**

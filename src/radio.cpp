@@ -328,10 +328,10 @@ void radio_sendStatus2() {
 void radio_sendStatus3() {
     radio_Message msg{};
 
-    msg.status3.qI = 0;
-    msg.status3.qJ = 0;
-    msg.status3.qK = 0;
-    msg.status3.qR = 0;
+    msg.status3.qR = radio_floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
+    msg.status3.qI = radio_floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
+    msg.status3.qJ = radio_floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
+    msg.status3.qK = radio_floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
 
     radio_sendMessage(msg, radio_MessageType::STATUS3);
 }
@@ -339,9 +339,9 @@ void radio_sendStatus3() {
 void radio_sendStatus4() {
     radio_Message msg{};
 
-    msg.status4.accelX = 0;
-    msg.status4.accelY = 0;
-    msg.status4.accelZ = 0;
+    msg.status4.accelX = radio_floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
+    msg.status4.accelY = radio_floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
+    msg.status4.accelZ = radio_floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
     msg.status4.empty = 0;
 
     radio_sendMessage(msg, radio_MessageType::STATUS4);
@@ -351,9 +351,9 @@ void radio_sendStatus4() {
 void radio_sendStatus5() {
     radio_Message msg{};
 
-    msg.status5.velX = 0;
-    msg.status5.velY = 0;
-    msg.status5.velZ = 0;
+    msg.status5.velX = radio_floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
+    msg.status5.velY = radio_floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
+    msg.status5.velZ = radio_floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
     msg.status5.empty = 0;
 
     radio_sendMessage(msg, radio_MessageType::STATUS5);
@@ -363,11 +363,11 @@ void radio_sendStatus5() {
 void radio_sendStatus6() {
     radio_Message msg{};
 
-    msg.status6.posX = 0;
-    msg.status6.posY = 0;
-    msg.status6.posZ = 0;
+    msg.status6.posX = radio_floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
+    msg.status6.posY = radio_floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
+    msg.status6.posZ = radio_floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
     msg.status6.empty = 0;
-    
+
     radio_sendMessage(msg, radio_MessageType::STATUS6);
 }
 

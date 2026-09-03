@@ -4,8 +4,15 @@
 #include "usb.h"
 #include "gyro.h"
 #include "gimbal.h"
-#include "error.h" 
+#include "error.h"
 #include "motor.h"
+
+#define CONTROL_LOOP_HZ 1000
+#define CONTROL_LOOP_US (1000000 / CONTROL_LOOP_HZ)
+
+// Higher priority (lower number) than the default (128) so the control tick
+// isn't delayed behind lower-priority peripheral interrupts.
+#define CONTROL_TIMER_PRIORITY 64
 
 // Initialize state to BOOT
 Drone::DroneStates Drone::state = Drone::DroneStates::BOOT;
@@ -15,6 +22,10 @@ uint16_t Drone::lastLoopTime = 0;
 uint16_t Drone::worstTime = 0;
 uint16_t Drone::bestTime = -1;
 uint16_t drone_rollAvg = 0;
+
+volatile bool Drone::controlTick = false;
+volatile uint32_t Drone::missedTicks = 0;
+IntervalTimer Drone::controlTimer;
 
 Target_t drone_targ0, drone_targ1;
 
@@ -75,6 +86,7 @@ bool Drone::startup() {
     case DroneStates::CONTROL_SETUP :
         Gimbal::setup();
         motor_setup();
+        startControlTimer();
         state = DroneStates::READY_ARMED;
 
     default:
@@ -131,6 +143,31 @@ void Drone::update() {
 
 }
 
+
+/**
+ * Starts the hardware timer that drives the flight control loop tick.
+ * Called once, after the gimbal/motor outputs it will command are ready.
+ */
+void Drone::startControlTimer() {
+    controlTimer.begin(onControlTick, CONTROL_LOOP_US);
+    controlTimer.priority(CONTROL_TIMER_PRIORITY);
+}
+
+/**
+ * ISR fired by the hardware timer at CONTROL_LOOP_HZ.
+ *
+ * @warning Runs in interrupt context. Do not add I2C/SPI/Serial calls, heap
+ * allocation, or anything else non-reentrant here - just flag the tick and
+ * let loop() run the actual flight control algorithm.
+ */
+void Drone::onControlTick() {
+    if (controlTick) {
+        // loop() hasn't serviced the previous tick yet - the control
+        // algorithm is running long. Track it so it shows up in telemetry.
+        missedTicks++;
+    }
+    controlTick = true;
+}
 
 /**
  * Helper class to update status LEDS to inform us of current state

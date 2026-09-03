@@ -7,15 +7,22 @@ sh2_SensorValue_t Gyro::sensorValue;
 
 Gyro::DroneState Gyro::droneState;
 
-Gyro::GyroSetupStates Gyro::state = Gyro::GyroSetupStates::I2C; 
+Gyro::GyroSetupStates Gyro::state = Gyro::GyroSetupStates::I2C;
 
 float Gyro::worldAccelX = 0.0f;
 float Gyro::worldAccelY = 0.0f;
 float Gyro::worldAccelZ = 0.0f;
-uint32_t Gyro::lastIntegrationTime = 0;
 
-// Shared temporaries for quaternions
-static float current_qW = 1.0f, current_qX = 0.0f, current_qY = 0.0f, current_qZ = 0.0f;
+// Identity quaternion until the first rotation vector report arrives
+float Gyro::quatReal = 1.0f;
+float Gyro::quatI = 0.0f;
+float Gyro::quatJ = 0.0f;
+float Gyro::quatK = 0.0f;
+
+float Gyro::droneQuatReal = 1.0f;
+float Gyro::droneQuatI = 0.0f;
+float Gyro::droneQuatJ = 0.0f;
+float Gyro::droneQuatK = 0.0f;
 
 bool Gyro::setup() {
 
@@ -27,6 +34,10 @@ bool Gyro::setup() {
             usb_send_text("Gyro I2C failed", 15);
             return false;
         }
+        // begin_I2C() leaves the bus at Teensy's default 100 kHz; the BNO08x
+        // is polled over I2C every main-loop iteration, so bump to 400 kHz
+        // Fast Mode (the documented safe max) to keep that poll cheap.
+        Wire.setClock(400000);
         state = EnableReport;
         break;
     
@@ -38,7 +49,7 @@ bool Gyro::setup() {
         https://learn.adafruit.com/adafruit-9-dof-orientation-imu-fusion-breakout-bno085/report-types
 
         */
-        if (! gyro.enableReport(SH2_GAME_ROTATION_VECTOR, 5000)) { // 100 hz
+        if (! gyro.enableReport(SH2_GAME_ROTATION_VECTOR, 5000)) { // 200 hz
             usb_send_text("Could not enable stabilized rotation vector", 41);
             return false;
         }
@@ -65,6 +76,13 @@ void Gyro::update(){
     // If gyro is not initialized, skip
     if (state != GyroSetupStates::Complete) return;
 
+    // Reports arrive at 200 Hz (5 ms); polling I2C faster than that just
+    // blocks on empty transactions. Throttle to every 2 ms (2.5x
+    // oversampling) so most main-loop iterations skip the I2C call entirely.
+    static elapsedMicros sincePoll = 0;
+    if (sincePoll < 2000) return;
+    sincePoll = 0;
+
     // Check if Gyro has new data
     if (!gyro.getSensorEvent(&sensorValue)) {
         // No available data
@@ -73,35 +91,27 @@ void Gyro::update(){
 
 
 
-    if (sensorValue.sensorId == SH2_ROTATION_VECTOR) {
-        sh2_RotationVectorWAcc_t quad = sensorValue.un.rotationVector;
+    // Setup only enables SH2_GAME_ROTATION_VECTOR, so that is the report that
+    // actually arrives here; SH2_ROTATION_VECTOR is a different report ID and
+    // would never match, leaving the quaternion stuck at identity.
+    if (sensorValue.sensorId == SH2_GAME_ROTATION_VECTOR) {
+        sh2_RotationVector_t quad = sensorValue.un.gameRotationVector;
 
-        // Convert raw Quaternions to standard Radians/Degrees
-        current_qW = quad.real;
-        current_qX = quad.i;
-        current_qY = quad.j;
-        current_qZ = quad.k;
+        quatReal = quad.real;
+        quatI = quad.i;
+        quatJ = quad.j;
+        quatK = quad.k;
 
-        quaternionToEuler(current_qW, current_qX, current_qY, current_qZ, true);
+        quaternionToEuler(quatReal, quatI, quatJ, quatK, true);
 
-        // // 3D Math to extract Pitch, Roll, Yaw
-        // float ysqr = current_qY * current_qY;
-        
-        // // Pitch (X-axis rotation)
-        // float t0 = +2.0f * (current_qW * current_qX + current_qW * current_qZ);
-        // float t1 = +1.0f - 2.0f * (current_qX * current_qX + ysqr);
-        // ypr.pitch = atan2(t0, t1) * RAD_TO_DEG;
-
-        // // roll (Y-axis rotation)
-        // float t2 = +2.0f * (current_qW * current_qY - current_qZ * current_qX);
-        // t2 = t2 > 1.0f ? 1.0f : t2;
-        // t2 = t2 < -1.0f ? -1.0f : t2;
-        // ypr.roll = asin(t2) * RAD_TO_DEG;
-
-        // // Yaw (Z-axis rotation)
-        // float t3 = +2.0f * (current_qW * current_qZ + current_qX * current_qY);
-        // float t4 = +1.0f - 2.0f * (ysqr + current_qZ * current_qZ);
-        // ypr.yaw = atan2(t3, t4) * RAD_TO_DEG;
+        // Re-express the same rotation using the drone's own body axes
+        // (Xd = gyro Zs, Yd = -gyro Xs, Zd = -gyro Ys). The rotation angle
+        // (real part) is basis-independent, so only the axis (vector) part
+        // needs to be remapped.
+        droneQuatReal = quatReal;
+        droneQuatI = quatK;
+        droneQuatJ = -quatI;
+        droneQuatK = -quatJ;
     }
 
     // Handle incoming Acceleration packet
@@ -110,38 +120,28 @@ void Gyro::update(){
         float ay = sensorValue.un.linearAcceleration.y;
         float az = sensorValue.un.linearAcceleration.z;
 
-        // 1. Rotate raw acceleration into world frame using the last known quaternion orientation
-        transformToWorldFrame(current_qW, current_qX, current_qY, current_qZ, ax, ay, az, worldAccelX, worldAccelY, worldAccelZ);
+        // BNO08x mounting relative to the drone body:
+        //   gyro Y = drone -Z
+        //   gyro X = drone -Y
+        //   gyro Z = drone  X
+        // i.e. drone Xd = gyro Zs, Yd = -gyro Xs, Zd = -gyro Ys. Remap raw
+        // sensor-frame acceleration into the drone's own body frame so
+        // body_accel.z is always the drone's vertical/thrust axis,
+        // regardless of chip mounting.
+        droneState.body_accel.x = az;
+        droneState.body_accel.y = -ax;
+        droneState.body_accel.z = -ay;
+
+        // Rotate raw (sensor-frame) acceleration into the world frame using
+        // the last known quaternion orientation. This is independent of the
+        // body_accel mounting remap above: SH2_GAME_ROTATION_VECTOR's
+        // reference frame is Z-up by hardware definition, so applying the
+        // raw quaternion to the raw acceleration already yields a world
+        // frame with Z vertical, regardless of how the chip is mounted.
+        transformToWorldFrame(quatReal, quatI, quatJ, quatK, ax, ay, az, worldAccelX, worldAccelY, worldAccelZ);
 
         updateDeadReckoning(worldAccelX, worldAccelY, worldAccelZ);
-
-        // // 2. Compute loop timing
-        // uint32_t now = micros();
-        // float dt = (now - lastIntegrationTime) / 1000000.0f;
-        // lastIntegrationTime = now;
-        // if (dt <= 0.0f || dt > 0.1f) return; // Fail-safe against loop timing anomalies
-
-        // // 3. Apply Deadband filtering to isolate ambient structural vibrations
-        // const float deadband = 0.08f; // m/s^2 
-        // if (abs(worldAccelX) < deadband) worldAccelX = 0.0f;
-        // if (abs(worldAccelY) < deadband) worldAccelY = 0.0f;
-        // if (abs(worldAccelZ) < deadband) worldAccelZ = 0.0f;
-
-        // // 4. Double Integration Step
-        // droneState.velocity.x += worldAccelX * dt;
-        // droneState.velocity.y += worldAccelY * dt;
-        // droneState.velocity.z += worldAccelZ * dt;
-
-        // droneState.position.x += droneState.velocity.x * dt;
-        // droneState.position.y += droneState.velocity.y * dt;
-        // droneState.position.z += droneState.velocity.z * dt;
-
-        // // 5. Apply the Leaky Integrator (Drain accumulation when standing completely still)
-        // const float leak = 0.985f;
-        // if (worldAccelX == 0.0f) { droneState.velocity.x *= leak; droneState.position.x *= leak; }
-        // if (worldAccelY == 0.0f) { droneState.velocity.y *= leak; droneState.position.y *= leak; }
-        // if (worldAccelZ == 0.0f) { droneState.velocity.z *= leak; droneState.position.z *= leak; }
-    } 
+    }
 }
 
 float Gyro::getPitch() {
@@ -278,11 +278,12 @@ void Gyro::debug() {
         {
         case 0:
             sprintf(debugOut, "Pitch %.3f, Yaw %.3f, Roll %.3f", getPitch(), getYaw(), getRoll());
-            usb_send_text(debugOut, sizeof(debugOut));
+            usb_send_text(debugOut, strlen(debugOut));
             break;
         case 1:
             sprintf(debugOut, "PosX %.3f, PosY %.3f, PosZ %.3f", droneState.position.x, droneState.position.y, droneState.position.z);
-            usb_send_text(debugOut, sizeof(debugOut));
+            usb_send_text(debugOut, strlen(debugOut));
+            break;
         default:
             break;
         }

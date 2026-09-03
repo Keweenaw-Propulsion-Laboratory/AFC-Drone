@@ -17,10 +17,10 @@ class Gyro{
     };
 
     struct DroneState{
-        state_t body_accel; // Acceleration in reference to the vehicle
-        state_t norm_accel; // Acceleration normalized to gravity. 
-        state_t velocity; // Velocity normalized to gravity
-        state_t position; // Position
+        state_t body_accel; // Acceleration in the drone's own body frame (z = vertical/thrust axis)
+        state_t norm_accel; // Acceleration normalized to gravity.
+        state_t velocity; // World-frame velocity (z = vertical)
+        state_t position; // World-frame position (z = vertical)
 
     };
     
@@ -28,11 +28,23 @@ class Gyro{
     static DroneState droneState;
     static uint32_t lastCheck;
 
+    // Latest orientation quaternion in the raw BNO08x sensor frame (real, i, j, k), updated in update()
+    static float quatReal;
+    static float quatI;
+    static float quatJ;
+    static float quatK;
+
+    // Same orientation quaternion remapped into the drone's own body frame
+    // (see the mounting remap comment in update()). This is what telemetry
+    // consumers should use to report vehicle attitude.
+    static float droneQuatReal;
+    static float droneQuatI;
+    static float droneQuatJ;
+    static float droneQuatK;
+
     static float worldAccelX;
     static float worldAccelY;
     static float worldAccelZ;
-
-    static uint32_t lastIntegrationTime;
 
     // Functions
     static bool setup();

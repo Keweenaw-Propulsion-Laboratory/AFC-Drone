@@ -10,11 +10,11 @@ optionally, observes or communicates through the RFM69 radio.
 | --- | --- | --- | --- |
 | USB | Dashboard → drone | `COMMAND` | Implemented; no acknowledgement is sent. |
 | USB | Dashboard → drone | `CONFIG` `SET` / `READ` | Implemented. |
-| USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; several fields are placeholders. |
+| USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; `voltage` is still a placeholder. |
 | USB | Drone → dashboard | `DEBUG_TEXT` | Implemented. |
 | USB | Drone → dashboard | `RADIO_PACKET` relay | Implemented for sent and received RFM69 packets. |
 | RFM69 | Ground station → drone | `COMMAND` | Implemented. |
-| RFM69 | Drone → ground station | `STATUS0`–`STATUS6` | Implemented at approximately 10 Hz; types 3–6 are placeholders. |
+| RFM69 | Drone → ground station | `STATUS0`–`STATUS6` | Implemented at approximately 10 Hz; types 3–6 (quaternion, acceleration, velocity, position) now carry live Gyro data. |
 | RFM69 | Ground station → drone | `CONFIG` | Partially implemented; see [Radio configuration limitations](#radio-configuration-limitations). |
 
 All multi-byte integers and IEEE-754 `float` values are little-endian. All
@@ -99,10 +99,10 @@ The drone sends this 54-byte record every 100 ms while the main loop runs.
 | 16 | `uint8` | `motor1Set` | Bottom motor output | Live value |
 | 17 | `uint8` | `motor2Set` | Top motor output | Live value |
 | 18 | `uint16` | `voltage` | Battery voltage | Always `0` currently |
-| 20 | `int16` × 4 | `qR`, `qI`, `qJ`, `qK` | Quaternion | Always `0` currently |
-| 28 | `int16` × 3 | `accelX`, `accelY`, `accelZ` | Acceleration | Always `0` currently |
-| 34 | `int16` × 3 | `velX`, `velY`, `velZ` | Velocity | Always `0` currently |
-| 40 | `int16` × 3 | `posX`, `posY`, `posZ` | Position | Always `0` currently |
+| 20 | `int16` × 4 | `qR`, `qI`, `qJ`, `qK` | Quaternion | Drone-body-frame orientation (remapped from the raw BNO08x mounting axes), fixed-point ×32767 (component range −1.0–1.0) |
+| 28 | `int16` × 3 | `accelX`, `accelY`, `accelZ` | Acceleration | Gyro world-frame linear acceleration, fixed-point ×1000 (m/s² → mm/s²) |
+| 34 | `int16` × 3 | `velX`, `velY`, `velZ` | Velocity | Gyro dead-reckoned velocity, fixed-point ×1000 (m/s → mm/s) |
+| 40 | `int16` × 3 | `posX`, `posY`, `posZ` | Position | Gyro dead-reckoned position, fixed-point ×100 (m → cm) |
 | 46 | `float` | `latitude` | Latitude | Fixed test value currently |
 | 50 | `float` | `longitude` | Longitude | Fixed test value currently |
 
@@ -211,10 +211,10 @@ status packets can arrive later than the 100 ms telemetry tick.
 | `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 rssi`, `uint8 currentMode` | Live fields; RSSI is stored in an unsigned byte. |
 | `STATUS1` | `int16 gimbalPitchNorm`, `int16 gimbalYawNorm`, `uint16 topServoSet`, `uint16 bottomServoSet` | Live fields. |
 | `STATUS2` | `uint16 motor1set`, `uint16 motor2set`, `uint16 voltage`, `uint16 reserved` | Motor values live; voltage is `0`. |
-| `STATUS3` | Four `int16` quaternion fields: `qR`, `qI`, `qJ`, `qK` | All zero currently. |
-| `STATUS4` | Three `int16` acceleration fields plus `int16 reserved` | All zero currently. |
-| `STATUS5` | Three `int16` velocity fields plus `int16 reserved` | All zero currently. |
-| `STATUS6` | Three `int16` position fields plus `int16 reserved` | All zero currently. |
+| `STATUS3` | Four `int16` quaternion fields: `qR`, `qI`, `qJ`, `qK` | Drone-body-frame orientation, fixed-point ×32767. |
+| `STATUS4` | Three `int16` acceleration fields plus `int16 reserved` | Gyro world-frame acceleration, fixed-point ×1000 (mm/s²). |
+| `STATUS5` | Three `int16` velocity fields plus `int16 reserved` | Gyro dead-reckoned velocity, fixed-point ×1000 (mm/s). |
+| `STATUS6` | Three `int16` position fields plus `int16 reserved` | Gyro dead-reckoned position, fixed-point ×100 (cm). |
 
 ### RFM69 command (type 8)
 

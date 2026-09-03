@@ -167,6 +167,19 @@ extern int16_t radio_avgRSSI;
             : message(msg), type(t) {}
     };
 
+        // Fixed-point scale factors for packing Gyro floats into int16 status fields.
+        constexpr float RADIO_QUAT_SCALE = 32767.0f;  // Quaternion components are unit range [-1, 1]
+        constexpr float RADIO_ACCEL_SCALE = 1000.0f;  // m/s^2 -> mm/s^2
+        constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
+        constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
+
+        inline int16_t radio_floatToFixed(float value, float scale) {
+            float scaled = value * scale;
+            if (scaled > 32767.0f) scaled = 32767.0f;
+            if (scaled < -32768.0f) scaled = -32768.0f;
+            return static_cast<int16_t>(scaled);
+        }
+
         void radio_sendStatus0();
         void radio_sendStatus1();
         void radio_sendStatus2();

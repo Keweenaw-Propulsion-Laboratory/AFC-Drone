@@ -41,6 +41,7 @@ static uint16_t checksum(PersistentConfig config) {
 }
 
 void config_save() {
+    // If drone is inflight do run blocking save to EEPROM.
     if (Drone::state == Drone::DroneStates::FLIGHT) {
         return;
     }
