@@ -134,7 +134,7 @@ All configuration requests begin with:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
-| 0 | `uint8` | Configuration format version (`1`) |
+| 0 | `uint8` | Configuration format version (`2`) |
 | 1 | `uint8` | Operation: `READ = 1`, `SET = 2` |
 | 2 | `uint8` | Number of entries |
 
@@ -157,14 +157,17 @@ Configuration keys and values:
 
 | Key value | Name | Accepted set value | Default |
 | ---: | --- | --- | ---: |
-| 0 | `TxPowerDbm` | 14–20 | 20 |
-| 1 | `UsbRelayEnabled` | 0 or 1 | 1 |
-| 2 | `RadioEnabled` | 0 or 1 | 1 |
-| 3 | `SkipRadioHandshake` | 0 or 1 | 1 |
-| 4 | `GimbalPitchOffset` | 60–120 | 90 |
-| 5 | `GimbalYawOffset` | 60–120 | 89 |
-| 6 | `Motor1Offset` | −100–100 | 0 |
-| 7 | `Motor2Offset` | −100–100 | 0 |
+| 0 | `DebugMode` | 0 or 1 | 0 |
+| 1 | `TxPowerDbm` | 14–20 | 20 |
+| 2 | `UsbRelayEnabled` | 0 or 1 | 1 |
+| 3 | `RadioEnabled` | 0 or 1 | 1 |
+| 4 | `SkipRadioHandshake` | 0 or 1 | 1 |
+| 5 | `GimbalPitchOffset` | 60–120 | 90 |
+| 6 | `GimbalYawOffset` | 60–120 | 89 |
+| 7 | `Motor1Offset` | −100–100 | 0 |
+| 8 | `Motor2Offset` | −100–100 | 0 |
+
+`DebugMode` is accepted and persisted but does not yet gate any behavior.
 
 `ConfigResult` values are: `OK = 0`, `INVALID_VALUE = 1`, `INVALID_KEY = 2`,
 `UNSAFE_STATE = 3`, `UNKNOWN_VERSION = 4`, and `UNKNOWN_OP = 5`. Changes are
@@ -208,9 +211,9 @@ status packets can arrive later than the 100 ms telemetry tick.
 
 | Type | Byte layout | Current behavior |
 | --- | --- | --- |
-| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 rssi`, `uint8 currentMode` | Live fields; RSSI is stored in an unsigned byte. |
+| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 currentMode`, `uint8 reserved` | Live fields. `currentMode` is at offset 6; RSSI moved to `STATUS2`. |
 | `STATUS1` | `int16 gimbalPitchNorm`, `int16 gimbalYawNorm`, `uint16 topServoSet`, `uint16 bottomServoSet` | Live fields. |
-| `STATUS2` | `uint16 motor1set`, `uint16 motor2set`, `uint16 voltage`, `uint16 reserved` | Motor values live; voltage is `0`. |
+| `STATUS2` | `uint16 motor1set`, `uint16 motor2set`, `uint16 voltage`, `uint16 rssi` | Motor values live; voltage is `0`. `rssi` carries the signed RFM69 RSSI in a `uint16` - reinterpret as `int16`. |
 | `STATUS3` | Four `int16` quaternion fields: `qR`, `qI`, `qJ`, `qK` | Drone-body-frame orientation, fixed-point ×32767. |
 | `STATUS4` | Three `int16` acceleration fields plus `int16 reserved` | Gyro world-frame acceleration, fixed-point ×1000 (mm/s²). |
 | `STATUS5` | Three `int16` velocity fields plus `int16 reserved` | Gyro dead-reckoned velocity, fixed-point ×1000 (mm/s). |
@@ -228,7 +231,7 @@ The 8-byte layout is:
 
 | Offset | Type | Field |
 | ---: | --- | --- |
-| 0 | `uint8` | Config format version (`1`) |
+| 0 | `uint8` | Config format version (`2`) |
 | 1 | `uint8` | Request operation (`READ = 1`, `SET = 2`) or response result |
 | 2 | `uint16` | `ConfigKey`, little-endian |
 | 4 | `uint32` | Value, little-endian; interpret as signed for configuration values that allow negatives |

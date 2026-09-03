@@ -5,12 +5,36 @@
 #include "drone.h"
 
 static constexpr uint32_t CONFIG_MAGIC = 0x41455245; // AERE
-const uint8_t CONFIG_VERSION = 1;
+const uint8_t CONFIG_VERSION = 2;
 static constexpr int EEPROM_ADDRESS = 0;
 
 PersistentConfig config{};
 
 static void config_migrate(PersistentConfig &stored);
+
+/**
+ * PersistentConfig as it was laid out at CONFIG_VERSION 1.
+ *
+ * Version 2 inserted debugMode at the front of the config block and moved
+ * txPowerDbm after the booleans, so a stored v1 image cannot be reinterpreted
+ * as the current struct. Keeping the old layout here lets the gimbal trim -
+ * which is a per-airframe mechanical calibration - survive the upgrade instead
+ * of silently reverting to defaults and needing to be re-measured.
+ */
+struct __attribute__((packed)) PersistentConfigV1
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t crc;
+    uint8_t txPowerDbm;
+    bool usbRelayEnabled;
+    bool radioEnabled;
+    bool skipRadioHandshake;
+    int16_t gimbalPitchOffset;
+    int16_t gimbalYawOffset;
+    int8_t motor1offset;
+    int8_t motor2offset;
+};
 
 /**
  * Set the default values for configs here.
@@ -34,12 +58,20 @@ PersistentConfig defaults()
     };
 }
 
-static uint16_t checksum(PersistentConfig config)
+/**
+ * Byte sum over a config image with the crc field zeroed.
+ *
+ * Templated so a stored image from an older CONFIG_VERSION can be validated
+ * with the same rule before its fields are trusted by config_migrate().
+ * Takes its argument by value: the copy is what gets its crc zeroed.
+ */
+template <typename ConfigT>
+static uint16_t checksum(ConfigT image)
 {
-    config.crc = 0;
-    const auto *bytes = reinterpret_cast<const uint8_t *>(&config);
+    image.crc = 0;
+    const auto *bytes = reinterpret_cast<const uint8_t *>(&image);
     uint16_t sum = 0;
-    for (size_t i = 0; i < sizeof(config); ++i)
+    for (size_t i = 0; i < sizeof(image); ++i)
     {
         sum = static_cast<uint16_t>(sum + bytes[i]);
     }
@@ -270,12 +302,46 @@ static void config_migrate(PersistentConfig &stored)
     switch (stored.version)
     {
 
+    case (1):
+    {
+        // Re-read the image under the v1 layout. Nothing about the stored bytes
+        // has been validated yet, so check the magic and checksum against the
+        // OLD struct before carrying any of its fields forward.
+        PersistentConfigV1 legacy{};
+        EEPROM.get(EEPROM_ADDRESS, legacy);
+
+        if (legacy.magic != CONFIG_MAGIC ||
+            legacy.crc != checksum(legacy))
+        {
+            stored = defaults();
+            break;
+        }
+
+        // Start from defaults so fields added in v2 (debugMode) get a sane
+        // value, then carry over everything v1 knew about.
+        stored = defaults();
+        stored.txPowerDbm = legacy.txPowerDbm;
+        stored.usbRelayEnabled = legacy.usbRelayEnabled;
+        stored.radioEnabled = legacy.radioEnabled;
+        stored.skipRadioHandshake = legacy.skipRadioHandshake;
+        stored.gimbalPitchOffset = legacy.gimbalPitchOffset;
+        stored.gimbalYawOffset = legacy.gimbalYawOffset;
+        stored.motor1offset = legacy.motor1offset;
+        stored.motor2offset = legacy.motor2offset;
+        break;
+    }
+
     case (0):
     default:
         // If there is no valid version migration, reset to defaults
         stored = defaults();
         break;
     }
+
+    // defaults() stamps the current version; a migrated image must carry it too
+    // so the next boot takes the fast path instead of migrating again.
+    stored.magic = CONFIG_MAGIC;
+    stored.version = CONFIG_VERSION;
 
     config = stored;
     // Save migrated configs

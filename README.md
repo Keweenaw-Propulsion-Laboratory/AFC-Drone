@@ -33,9 +33,8 @@ The flight software is divided into several subsystem-focused modules.
 | `radio.h/.cpp`   | RFM69 initialization, ground-station connection, command reception, and telemetry transmission |
 | `gyro.h/.cpp`    | BNO08x IMU initialization and quaternion-to-Euler conversion                                   |
 | `gimbal.h/.cpp`  | Gimbal servo control, mechanical correction, and position interpolation                        |
-| `error.h/.cpp`   | Error storage and system fault reporting                                                       |
-| `debug.h/.cpp`   | USB serial detection and conditional debug output                                              |
-| `configs.h/.cpp` | Placeholder for settings that will eventually be stored in nonvolatile memory                  |
+| `error.h/.cpp`   | Error storage and system fault reporting                                                       |                    |
+| `configs.h/.cpp` | Versioned persistent settings in EEPROM: load, validate, migrate, and apply configuration      |
 
 The `Drone` class coordinates the individual subsystems and tracks the overall state of the vehicle.
 
@@ -69,9 +68,9 @@ The Arduino `setup()` function repeatedly calls `Drone::startup()` until the veh
 
 The flight controller first configures the status LED and checks for a USB serial connection.
 
-The current configuration has `waitForSerial` enabled. This means startup pauses until a serial connection is detected. Serial output is then used for setup messages and debugging.
+The current configuration does not wait for a Serial connection. This means startup progresses regardless of a outside connection. The vehicle will then sit idle in `READY/ARMED` until instructed otherwise. 
 
-Persistent configuration storage is planned so this behavior can later be enabled or disabled without rebuilding the firmware.
+Persistent configuration is implemented. Settings are stored in EEPROM, loaded during startup, and can be changed at runtime over USB or radio without rebuilding the firmware. See [Persistent Configuration](#persistent-configuration).
 
 ### 2. Radio Initialization
 
@@ -213,16 +212,44 @@ configuration commands use a signed 32-bit integer value; boolean values use
 rejected with `INVALID_VALUE`. Configuration changes are rejected while the
 vehicle is in `FLIGHT`.
 
+### Format Version and Migration
+
+The stored image starts with a magic value, a format version, and a checksum.
+`config_load()` accepts it only when all three are valid for the current
+`CONFIG_VERSION`:
+
+| Stored image | Result |
+| --- | --- |
+| Magic, version, and checksum all valid | Loaded as-is |
+| Version differs from `CONFIG_VERSION` | `config_migrate()` runs |
+| Version matches but the checksum fails | Reset to defaults and re-saved |
+
+`CONFIG_VERSION` is currently `2`. Version 2 added `DebugMode` and moved
+`TxPowerDbm` after the boolean settings, which changed both the stored layout
+and every wire ID above `0`. `config_migrate()` re-reads a version 1 image
+under its original layout, validates it against that layout's own checksum, and
+carries the settings forward, so a per-airframe gimbal trim survives the
+upgrade instead of needing to be re-measured. An image that fails that
+validation falls back to defaults.
+
+Any change to `PersistentConfig` must increment `CONFIG_VERSION` and add a
+matching case to `config_migrate()`.
+
 | Key | Current wire ID | Accepted value | Default | Effect |
 | --- | ---: | --- | ---: | --- |
-| `TxPowerDbm` | 0 | 14–20 | 20 | RFM69 transmit power in dBm. |
-| `UsbRelayEnabled` | 1 | 0 or 1 | 1 | Enables USB communication handling. |
-| `RadioEnabled` | 2 | 0 or 1 | 1 | Enables periodic radio processing. |
-| `SkipRadioHandshake` | 3 | 0 or 1 | 1 | Skips the radio connection handshake when enabled. |
-| `GimbalPitchOffset` | 4 | 60–120 | 90 | Pitch-servo center/setpoint offset in degrees. |
-| `GimbalYawOffset` | 5 | 60–120 | 89 | Yaw-servo center/setpoint offset in degrees. |
-| `Motor1Offset` | 6 | −100–100 | 0 | Top-motor speed adjustment. |
-| `Motor2Offset` | 7 | −100–100 | 0 | Bottom-motor speed adjustment. |
+| `DebugMode` | 0 | 0 or 1 | 0 | Persisted, but does not yet gate any behavior. |
+| `TxPowerDbm` | 1 | 14–20 | 20 | RFM69 transmit power in dBm. |
+| `UsbRelayEnabled` | 2 | 0 or 1 | 1 | Enables USB communication handling. |
+| `RadioEnabled` | 3 | 0 or 1 | 1 | Enables periodic radio processing. |
+| `SkipRadioHandshake` | 4 | 0 or 1 | 1 | Skips the radio connection handshake when enabled. |
+| `GimbalPitchOffset` | 5 | 60–120 | 90 | Pitch-servo center/setpoint offset in degrees. |
+| `GimbalYawOffset` | 6 | 60–120 | 89 | Yaw-servo center/setpoint offset in degrees. |
+| `Motor1Offset` | 7 | −100–100 | 0 | Top-motor speed adjustment. |
+| `Motor2Offset` | 8 | −100–100 | 0 | Bottom-motor speed adjustment. |
+
+Wire IDs are the `ConfigKey` enum values and shift whenever a key is inserted.
+`CONFIG_VERSION` is bumped in the same change so an out-of-date client is
+rejected with `UNKNOWN_VERSION` instead of silently writing the wrong setting.
 
 The USB configuration request uses a 16-bit little-endian key and a 32-bit
 little-endian signed value for each entry. A `SET` request can contain up to
@@ -242,7 +269,7 @@ and integer representation listed above.
 
 | Byte | Field | Request meaning |
 | ---: | --- | --- |
-| 0 | `version` | Must equal `CONFIG_VERSION` (currently `1`). |
+| 0 | `version` | Must equal `CONFIG_VERSION` (currently `2`). |
 | 1 | `state.operation` | `READ` (`1`) or `SET` (`2`). |
 | 2–3 | `configKey` | `ConfigKey` as a 16-bit little-endian value. |
 | 4–7 | `value` | 32-bit little-endian value. It is ignored for `READ`; it is the requested signed configuration value for `SET`. |
@@ -252,6 +279,9 @@ The drone responds using the same `CONFIG` message type. Response byte 1 is a
 value in bytes 4–7. Because the radio payload is fixed at eight bytes, batch
 configuration is available only over USB; send one radio packet for each
 configuration key.
+
+`ConfigOp::ZERO_ALL` (`255`) is reserved in the operation enum but is not
+handled on either transport; sending it returns `UNKNOWN_OP`.
 
 ---
 
@@ -321,6 +351,8 @@ The current firmware includes:
 * Message definitions for commands and telemetry
 * Error buffering
 * Loop-timing infrastructure
+* Versioned persistent configuration in EEPROM, with migration
+* Configuration set/read over USB (batched) and radio (single key)
 * State-based LED patterns
 
 Work still in progress includes:
@@ -332,6 +364,5 @@ Work still in progress includes:
 * Processing live IMU data in the main loop
 * Implementing command timeouts and failsafe behavior
 * Completing GPS support
-* Persisting configuration to nonvolatile memory
 * Reporting errors over the radio
 * Finalizing the transition from `READY_ARMED` to `FLIGHT`
