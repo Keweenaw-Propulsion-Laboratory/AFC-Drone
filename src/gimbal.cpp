@@ -55,29 +55,29 @@ void Gimbal::set(float pitch, float yaw) {
     float x_frac = (yaw - yawValues[row]) / (yawValues[row + 1] - yawValues[row]);
 
     // Get the surrounding calculated values
-    float q11 = topServoMap[column]     [row];      // Q(1,1) Top left
-    float q21 = topServoMap[column + 1] [row];      // Q(2,1) Top Right
-    float q12 = topServoMap[column]     [row + 1];  // Q(1,2) Bottom Left
-    float q22 = topServoMap[column + 1] [row + 1];  // Q(2,2) Bottom Right
+    float q11 = topServoMap[row]     [column];      // Q(1,1) Top left
+    float q21 = topServoMap[row + 1] [column];      // Q(2,1) Top Right
+    float q12 = topServoMap[row]     [column + 1];  // Q(1,2) Bottom Left
+    float q22 = topServoMap[row + 1] [column + 1];  // Q(2,2) Bottom Right
 
-    float topInterp = q11 + x_frac * (q21 - q11);
-    float bottomInterp = q12 +x_frac * (q22 - q11);
+    float topInterp = q11 + y_frac * (q12 - q11);
+    float bottomInterp = q21 + y_frac * (q22 - q21);
 
     // Resulting top servo setpoint
-    float topServo = topInterp + y_frac * (bottomInterp - topInterp);
+    float topServo = topInterp + x_frac * (bottomInterp - topInterp);
 
     // Repeat interpolation for bottom servo
     // Get the surrounding calculated values
-    q11 = bottomServoMap[column]     [row];      // Q(1,1) Top left
-    q21 = bottomServoMap[column + 1] [row];      // Q(2,1) Top Right
-    q12 = bottomServoMap[column]     [row + 1];  // Q(1,2) Bottom Left
-    q22 = bottomServoMap[column + 1] [row + 1];  // Q(2,2) Bottom Right
+    q11 = bottomServoMap[row]     [column];      // Q(1,1) Top left
+    q21 = bottomServoMap[row + 1] [column];      // Q(2,1) Top Right
+    q12 = bottomServoMap[row]     [column + 1];  // Q(1,2) Bottom Left
+    q22 = bottomServoMap[row + 1] [column + 1];  // Q(2,2) Bottom Right
 
-    topInterp = q11 + x_frac * (q21 - q11);
-    bottomInterp = q12 +x_frac * (q22 - q12);
+    topInterp = q11 + y_frac * (q12 - q11);
+    bottomInterp = q21 + y_frac * (q22 - q21);
 
     // Resulting top servo setpoint
-    float bottomServo = topInterp + y_frac * (bottomInterp - topInterp);
+    float bottomServo = topInterp + x_frac * (bottomInterp - topInterp);
     
     // Serial.printf("Top %f \nBot %f ", topServo, bottomServo);
 

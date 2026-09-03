@@ -13,8 +13,8 @@ static constexpr int ESC_MAX_US = 2000;
 static Servo topMotor;
 static Servo bottomMotor;
 
-uint8_t motor_bottomSetSpeed = 0;
-uint8_t motor_topSetSpeed = 0;
+uint16_t motor_bottomSetSpeed = 0;
+uint16_t motor_topSetSpeed = 0;
 
 void motor_setup() {
     bottomMotor.attach(BOTTOM_MOTOR_PIN);
@@ -27,9 +27,14 @@ void motor_setup() {
 
 void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
-    motor_topSetSpeed = topMotorSpeed + config_get().motor1offset;
-    motor_bottomSetSpeed = bottomMotorSpeed + config_get().motor2offset;
+    motor_topSetSpeed = (int)topMotorSpeed + config_get().motor1offset;
+    motor_bottomSetSpeed = (int)bottomMotorSpeed + config_get().motor2offset;
     
+    // Clamp the motor set speed to be between 0 and 255
+    motor_topSetSpeed = motor_topSetSpeed <= 0 ? 0 : motor_topSetSpeed > 255 ? 255 : motor_topSetSpeed;
+    motor_bottomSetSpeed = motor_bottomSetSpeed <= 0 ? 0 : motor_bottomSetSpeed > 255 ? 255 : motor_bottomSetSpeed;
+
+
     uint16_t bottomSpeed =
         ESC_MIN_RUNNING +
         ((uint32_t)motor_bottomSetSpeed * (ESC_MAX_US - ESC_MIN_RUNNING)) / 255;
@@ -40,11 +45,11 @@ void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
  
     // If motors are suppose to be off set to min armed value
-    if (motor_bottomSetSpeed == 0) {
+    if (bottomMotorSpeed == 0) {
         bottomSpeed = ESC_MIN_US;
     }
 
-    if (motor_topSetSpeed == 0) {
+    if (topMotorSpeed == 0) {
         topSpeed = ESC_MIN_US;
     }
 

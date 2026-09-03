@@ -10,39 +10,47 @@ static constexpr int EEPROM_ADDRESS = 0;
 
 PersistentConfig config{};
 
-static void config_migrate(PersistentConfig& stored);
+static void config_migrate(PersistentConfig &stored);
 
 /**
- * Set the default values for configs here. 
+ * Set the default values for configs here.
  */
-PersistentConfig defaults() {
+PersistentConfig defaults()
+{
     return {
-        CONFIG_MAGIC, // Magic
+        CONFIG_MAGIC,   // Magic
         CONFIG_VERSION, // Version
-        0, // CRC
-        20, // Radio transmit power
-        true, // USB enabled
-        true, // Radio enabled
-        true, // Skip radio handshake
-        90,89, // Gimbal Offset
-        0, 0, // Motor Offset
-               
+        0,              // CRC
+        false,          // Debug mode
+        true,           // USB enabled
+        true,           // Radio enabled
+        true,           // Skip radio handshake
+        20,             // Radio transmit power
+        90,
+        89, // Gimbal Offset
+        0,
+        0, // Motor Offset
+
     };
 }
 
-static uint16_t checksum(PersistentConfig config) {
+static uint16_t checksum(PersistentConfig config)
+{
     config.crc = 0;
-    const auto* bytes = reinterpret_cast<const uint8_t*>(&config);
+    const auto *bytes = reinterpret_cast<const uint8_t *>(&config);
     uint16_t sum = 0;
-    for (size_t i = 0; i < sizeof(config); ++i) {
+    for (size_t i = 0; i < sizeof(config); ++i)
+    {
         sum = static_cast<uint16_t>(sum + bytes[i]);
     }
     return sum;
 }
 
-void config_save() {
+void config_save()
+{
     // If drone is inflight do run blocking save to EEPROM.
-    if (Drone::state == Drone::DroneStates::FLIGHT) {
+    if (Drone::state == Drone::DroneStates::FLIGHT)
+    {
         return;
     }
 
@@ -50,89 +58,107 @@ void config_save() {
     config.crc = checksum(config);
 
     EEPROM.put(EEPROM_ADDRESS, config);
-
 }
 
-void config_load() {
+void config_load()
+{
     PersistentConfig stored{};
     EEPROM.get(EEPROM_ADDRESS, stored);
 
     // If configs are valid load values
     if (stored.magic == CONFIG_MAGIC &&
         stored.version == CONFIG_VERSION &&
-        stored.crc == checksum(stored)) {
+        stored.crc == checksum(stored))
+    {
         config = stored;
 
-    // Else if the version is wrong initiate migration
-    } else if (stored.version != CONFIG_VERSION) {
+        // Else if the version is wrong initiate migration
+    }
+    else if (stored.version != CONFIG_VERSION)
+    {
         config_migrate(stored);
-    } else {
-    // If values are unrecoverable reset to defaults. 
+    }
+    else
+    {
+        // If values are unrecoverable reset to defaults.
         config = defaults();
         config_save();
     }
 }
 
-const PersistentConfig& config_get() {
-    
+const PersistentConfig &config_get()
+{
+
     return config;
 }
 
-PersistentConfig& config_mutableGet() {
+PersistentConfig &config_mutableGet()
+{
     return config;
 }
 
-void restoreDefaults() {
+void restoreDefaults()
+{
     config = defaults();
     config_save();
 }
 
-static ConfigResult config_apply(ConfigKey key, int32_t value, bool& changed) {
-    switch (key) {
+static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
+{
+    switch (key)
+    {
     case ConfigKey::TxPowerDbm:
-        if (value < 14 || value > 20) return ConfigResult::INVALID_VALUE;
+        if (value < 14 || value > 20)
+            return ConfigResult::INVALID_VALUE;
         changed = config.txPowerDbm != static_cast<uint8_t>(value);
         config.txPowerDbm = static_cast<uint8_t>(value);
         break;
 
     case ConfigKey::UsbRelayEnabled:
-        if (value != 0 && value != 1) return ConfigResult::INVALID_VALUE;
+        if (value != 0 && value != 1)
+            return ConfigResult::INVALID_VALUE;
         changed = config.usbRelayEnabled != static_cast<bool>(value);
         config.usbRelayEnabled = static_cast<bool>(value);
         break;
 
     case ConfigKey::RadioEnabled:
-        if (value != 0 && value != 1) return ConfigResult::INVALID_VALUE;
+        if (value != 0 && value != 1)
+            return ConfigResult::INVALID_VALUE;
         changed = config.radioEnabled != static_cast<bool>(value);
         config.radioEnabled = static_cast<bool>(value);
         break;
 
     case ConfigKey::SkipRadioHandshake:
-        if (value != 0 && value != 1) return ConfigResult::INVALID_VALUE;
+        if (value != 0 && value != 1)
+            return ConfigResult::INVALID_VALUE;
         changed = config.skipRadioHandshake != static_cast<bool>(value);
         config.skipRadioHandshake = static_cast<bool>(value);
         break;
 
     case ConfigKey::GimbalPitchOffset:
-        if (value < 60 || value > 120) return ConfigResult::INVALID_VALUE;
+        if (value < 60 || value > 120)
+            return ConfigResult::INVALID_VALUE;
         changed = config.gimbalPitchOffset != static_cast<int16_t>(value);
         config.gimbalPitchOffset = static_cast<int16_t>(value);
         break;
 
     case ConfigKey::GimbalYawOffset:
-        if (value < 60 || value > 120) return ConfigResult::INVALID_VALUE;
+        if (value < 60 || value > 120)
+            return ConfigResult::INVALID_VALUE;
         changed = config.gimbalYawOffset != static_cast<int16_t>(value);
         config.gimbalYawOffset = static_cast<int16_t>(value);
         break;
 
     case ConfigKey::Motor1Offset:
-        if (value < -100 || value > 100) return ConfigResult::INVALID_VALUE;
+        if (value < -100 || value > 100)
+            return ConfigResult::INVALID_VALUE;
         changed = config.motor1offset != static_cast<int8_t>(value);
         config.motor1offset = static_cast<int8_t>(value);
         break;
 
     case ConfigKey::Motor2Offset:
-        if (value < -100 || value > 100) return ConfigResult::INVALID_VALUE;
+        if (value < -100 || value > 100)
+            return ConfigResult::INVALID_VALUE;
         changed = config.motor2offset != static_cast<int8_t>(value);
         config.motor2offset = static_cast<int8_t>(value);
         break;
@@ -144,47 +170,62 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool& changed) {
     return ConfigResult::OK;
 }
 
-ConfigResult config_set(ConfigKey key, int32_t value) {
-    if (Drone::state == Drone::DroneStates::FLIGHT) {
+ConfigResult config_set(ConfigKey key, int32_t value)
+{
+    if (Drone::state == Drone::DroneStates::FLIGHT)
+    {
         return ConfigResult::UNSAFE_STATE;
     }
 
     bool changed = false;
     const ConfigResult result = config_apply(key, value, changed);
 
-    if (changed) {
+    if (changed)
+    {
         config_save();
     }
 
     return result;
 }
 
-void config_set_batch(const ConfigUpdate* updates, ConfigResult* results,
-                      uint8_t count) {
-    if (updates == nullptr) return;
+void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
+                      uint8_t count)
+{
+    if (updates == nullptr)
+        return;
 
-    if (Drone::state == Drone::DroneStates::FLIGHT) {
-        for (uint8_t i = 0; i < count; ++i) {
-            if (results != nullptr) results[i] = ConfigResult::UNSAFE_STATE;
+    if (Drone::state == Drone::DroneStates::FLIGHT)
+    {
+        for (uint8_t i = 0; i < count; ++i)
+        {
+            if (results != nullptr)
+                results[i] = ConfigResult::UNSAFE_STATE;
         }
         return;
     }
 
     bool anyChanged = false;
-    for (uint8_t i = 0; i < count; ++i) {
+    for (uint8_t i = 0; i < count; ++i)
+    {
         bool changed = false;
         const ConfigResult result = config_apply(updates[i].key,
                                                  updates[i].value, changed);
-        if (results != nullptr) results[i] = result;
+        if (results != nullptr)
+            results[i] = result;
         anyChanged = anyChanged || changed;
     }
 
-    if (anyChanged) config_save();
+    if (anyChanged)
+        config_save();
 }
 
-int32_t config_read(ConfigKey key, ConfigResult& status) {
+int32_t config_read(ConfigKey key, ConfigResult &status)
+{
     status = ConfigResult::OK;
-    switch (key) {
+    switch (key)
+    {
+    case ConfigKey::DebugMode:
+        return config.debugMode;
     case ConfigKey::TxPowerDbm:
         return config.txPowerDbm;
 
@@ -217,13 +258,15 @@ int32_t config_read(ConfigKey key, ConfigResult& status) {
     return 0;
 }
 
-static void config_migrate(PersistentConfig& stored) {
-    switch (stored.version) {
+static void config_migrate(PersistentConfig &stored)
+{
+    switch (stored.version)
+    {
 
-        case (0):
-        default: 
-            // If there is no valid version migration, reset to defaults
-           stored = defaults();
+    case (0):
+    default:
+        // If there is no valid version migration, reset to defaults
+        stored = defaults();
         break;
     }
 

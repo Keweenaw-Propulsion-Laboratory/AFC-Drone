@@ -22,10 +22,11 @@ struct __attribute__((packed)) PersistentConfig {
     uint16_t crc; // Checksum
 
     // Config values
-    uint8_t txPowerDbm;
+    bool debugMode;
     bool usbRelayEnabled;
     bool radioEnabled;
     bool skipRadioHandshake;
+    uint8_t txPowerDbm;
     int16_t gimbalPitchOffset;
     int16_t gimbalYawOffset;
     int8_t motor1offset;
