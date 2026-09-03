@@ -1,7 +1,9 @@
+#pragma once
+
 #include <cstdint>
 
-extern uint8_t motor_topSetSpeed;
-extern uint8_t motor_bottomSetSpeed;
+extern uint16_t motor_topSetSpeed;
+extern uint16_t motor_bottomSetSpeed;
 
 /** 
  * Sets up required reasources

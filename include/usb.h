@@ -1,4 +1,7 @@
+#pragma once
 #include "Arduino.h"
+
+#include <cstring>
 
 // These are defined in radio.h.  Forward declarations keep usb.h independent
 // of the radio driver while allowing the relay API to use the shared types.
@@ -8,9 +11,10 @@ enum class radio_MessageType : uint8_t;
 enum class usb_message_types : uint8_t {
     RAW = 0, // Explicit value
     DEBUG_TEXT = 1,
-    RADIO_PACKET, 
-    TELEMETRY,
-    COMMAND
+    RADIO_PACKET = 2, 
+    TELEMETRY = 3,
+    COMMAND = 4,
+    CONFIG = 5,
 };
 
 // Wire format: 0xA5 0x5A, version, packetNum (little-endian), type, length,
@@ -28,6 +32,18 @@ void usb_update();
  * Send USB debug messages
  */
 void usb_send_text(const char* message, int length);
+
+/**
+ * Send a NUL-terminated debug string.
+ *
+ * Prefer this over the explicit-length overload for string literals: a
+ * hand-counted length that is too short silently truncates the message, and one
+ * that is too long reads past the literal.
+ */
+inline void usb_send_text(const char* message) {
+    if (message == nullptr) return;
+    usb_send_text(message, static_cast<int>(strlen(message)));
+}
 
 void usb_send_telemetry();
 void usb_radio_relay(const radio_Message& message, radio_MessageType type,

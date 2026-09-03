@@ -1,4 +1,7 @@
-#define STATUS_LED 10
+#pragma once
+
+#define STATUS_LED -1
+#include <Arduino.h>
 #include <cstdint>
 
 struct Target_t {
@@ -46,11 +49,27 @@ class Drone {
         static uint16_t bestTime; // Keep track of our best case loop time
         static DroneStates state; // The current state of the Drone
 
+        // Set by the hardware timer ISR every CONTROL_LOOP_US. loop() polls this
+        // and clears it before running the flight control algorithm, so the
+        // algorithm itself always executes in normal (non-ISR) context.
+        static volatile bool controlTick;
+
+        // Counts ticks where the previous one hadn't been serviced by loop() yet,
+        // i.e. the flight control algorithm is taking longer than CONTROL_LOOP_US.
+        static volatile uint32_t missedTicks;
+
     private:
         static bool hasSerial; // Is there a USB Serial connection to debug with
 
+        static IntervalTimer controlTimer; // Hardware timer driving the control loop tick
 
         static void updateLEDS();
         static void ledFader();
         static void doubleFlash();
+
+        static void startControlTimer();
+
+        // ISR: keep this minimal. No I2C/SPI/Serial calls or heap use here -
+        // it only flags that a tick occurred; loop() does the real work.
+        static void onControlTick();
 };

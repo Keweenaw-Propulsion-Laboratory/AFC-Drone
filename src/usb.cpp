@@ -8,6 +8,8 @@ between the Drone and a pysically connected Serial terminal
 #include "radio.h"
 #include "gimbal.h"
 #include "motor.h"
+#include "configs.h"
+#include "gyro.h"
 
 #include "Arduino.h"
 #include "circular_buffer.h"
@@ -16,6 +18,14 @@ static constexpr uint8_t MAX_DATA_LEN = 60; /** Max usb data length */
 static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
 static constexpr size_t USB_FRAME_OVERHEAD = 2 + 1 + 4 + 2;
+
+// Identify handshake: the dashboard sends RAW+IDENTIFY_QUERY_BYTE on every
+// fresh connection to tell a direct-wired drone apart from a base station
+// relay without the user picking a mode manually. See also
+// AFCDrone_BaseStation/src/main.cpp, which answers the same query with
+// DEVICE_KIND_BASE_STATION_RELAY.
+static constexpr uint8_t IDENTIFY_QUERY_BYTE = 0x3f;
+static constexpr uint8_t DEVICE_KIND_DRONE_DIRECT = 0x01;
 
 struct __attribute__((packed)) usb_command_t {
     struct __attribute__((packed)) flags {
@@ -70,11 +80,67 @@ struct __attribute__((packed)) usb_telemetry_t {
 
 };
 
+struct __attribute__((packed)) usb_config {
+    uint8_t version; // 1 byte
+    ConfigState state; // 1 byte
+    uint8_t length; // How many configs are in this message
+    ConfigKey key0; // 2 bytes each
+    int32_t value0; // 4 bytes each 
+    ConfigKey key1;
+    int32_t value1; // 15
+    ConfigKey key2;
+    int32_t value2; // 21
+    ConfigKey key3;
+    int32_t value3; // 27
+    ConfigKey key4; 
+    int32_t value4; // 33
+    ConfigKey key5;
+    int32_t value5; // 39
+    ConfigKey key6;
+    int32_t value6; // 45
+    ConfigKey key7;
+    int32_t value7; // 51
+    ConfigKey key8;
+    int32_t value8; // 57
+    uint32_t reserved : 24; // 3 bytes left over
+};
+
+struct __attribute__((packed)) usb_config_status {
+    ConfigKey key;
+    ConfigResult result;
+};
+
+struct __attribute__((packed)) usb_config_response {
+    uint8_t version;
+    ConfigOp operation;
+    uint8_t length;
+    ConfigResult result; // Request-level status
+    usb_config_status statuses[9];
+};
+
+struct __attribute__((packed)) usb_config_read_status {
+    ConfigKey key;
+    ConfigResult result;
+    int32_t value;
+};
+
+struct __attribute__((packed)) usb_config_read_response {
+    uint8_t version;
+    ConfigOp operation;
+    uint8_t length;
+    ConfigResult result; // Request-level status
+    usb_config_read_status statuses[8];
+};
+
 union __attribute__((packed)) usb_message_t {
     uint8_t raw[MAX_DATA_LEN];
     usb_command_t command;
     usb_telemetry_t telemetry;
+    usb_config config;
+    usb_config_response configResponse;
+    usb_config_read_response configReadResponse;
     radio_Message radio_message;
+    
 };
 
 // Payload for USB type RADIO_PACKET.  RadioHead carries its headers outside
@@ -106,6 +172,10 @@ static_assert(sizeof(usb_packet_t) <= 64, "USB packets must be 64 bytes or less"
 static_assert(sizeof(usb_command_t) == 8, "USB command wire size changed");
 static_assert(sizeof(usb_telemetry_t) <= MAX_DATA_LEN, "Telemetry exceeds USB payload limit");
 static_assert(sizeof(usb_radio_packet_t) == 11, "USB radio relay wire size changed");
+static_assert(sizeof(usb_config) == MAX_DATA_LEN, "USB config request layout changed");
+static_assert(sizeof(usb_config_response) == 31, "USB config response layout changed");
+static_assert(sizeof(usb_config_read_response) == MAX_DATA_LEN,
+              "USB config read response layout changed");
 
 
 
@@ -115,6 +185,9 @@ static Circular_Buffer<usb_packet_t, 16> usb_tx_buffer;
 static Circular_Buffer<usb_packet_t, 16> usb_rx_buffer;
 
 static uint16_t usb_global_packet_number = 0;
+
+static void usb_handleConfig(const usb_message_t& msg, uint8_t packetLength);
+static void usb_send(usb_message_t data, usb_message_types type, int length);
 
 static uint16_t usb_crc16_update(uint16_t crc, uint8_t value) {
     crc ^= static_cast<uint16_t>(value) << 8;
@@ -138,8 +211,16 @@ static uint16_t usb_packet_crc(const usb_packet_t& packet) {
 }
 
 static bool usb_is_valid_rx_header(const usb_header_t& header) {
-    return header.type == usb_message_types::COMMAND &&
-           header.packetLength == sizeof(usb_command_t);
+    if (header.type == usb_message_types::COMMAND) {
+        return header.packetLength == sizeof(usb_command_t);
+    }
+
+    if (header.type == usb_message_types::RAW) {
+        return header.packetLength == 1;
+    }
+
+    return header.type == usb_message_types::CONFIG &&
+           header.packetLength >= 3 && header.packetLength <= 57;
 }
 
 
@@ -247,6 +328,14 @@ void usb_update() {
         
         switch (pkt.header.type) {
 
+        case usb_message_types::RAW :
+            if (pkt.header.packetLength == 1 && pkt.data.raw[0] == IDENTIFY_QUERY_BYTE) {
+                usb_message_t reply{};
+                reply.raw[0] = DEVICE_KIND_DRONE_DIRECT;
+                usb_send(reply, usb_message_types::RAW, 1);
+            }
+            break;
+
         case usb_message_types::COMMAND :
         
             if (pkt.data.command.flags.targSlot == 0) {
@@ -264,7 +353,10 @@ void usb_update() {
             drone_activeSlot = pkt.data.command.flags.activeSlot;
 
             // Send back an ACK
+            break;
 
+        case usb_message_types::CONFIG:
+            usb_handleConfig(pkt.data, pkt.header.packetLength);
 
             break;
         
@@ -337,26 +429,121 @@ void usb_send_telemetry() {
     tx_message.telemetry.motor1Set = motor_bottomSetSpeed;
     tx_message.telemetry.motor2Set = motor_topSetSpeed;
     tx_message.telemetry.voltage = 0;
-    tx_message.telemetry.qR = 0;
-    tx_message.telemetry.qI = 0;
-    tx_message.telemetry.qJ = 0;
-    tx_message.telemetry.qK = 0;
-    tx_message.telemetry.accelX = 0;
-    tx_message.telemetry.accelY = 0;
-    tx_message.telemetry.accelZ = 0;
-    tx_message.telemetry.velX = 0;
-    tx_message.telemetry.velY = 0;
-    tx_message.telemetry.velZ = 0;
-    tx_message.telemetry.posX = 0;
-    tx_message.telemetry.posY = 0;
-    tx_message.telemetry.posZ = 0;
-    tx_message.telemetry.latitude = 38.78152975539397f;
-    tx_message.telemetry.longitude = -90.49115790740485f;
+    tx_message.telemetry.qR = radio_floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qI = radio_floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qJ = radio_floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
+    tx_message.telemetry.qK = radio_floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
+    tx_message.telemetry.accelX = radio_floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelY = radio_floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelZ = radio_floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
+    tx_message.telemetry.velX = radio_floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
+    tx_message.telemetry.velY = radio_floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
+    tx_message.telemetry.velZ = radio_floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
+    tx_message.telemetry.posX = radio_floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
+    tx_message.telemetry.posY = radio_floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
+    tx_message.telemetry.posZ = radio_floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
+    tx_message.telemetry.latitude = 47.119643352372485f;
+    tx_message.telemetry.longitude = -88.549229750287f;
 
     usb_send(tx_message, usb_message_types::TELEMETRY, sizeof(usb_telemetry_t));
 }
 
-void usb_radio_relay() {
+static void usb_handleConfig(const usb_message_t& msg, uint8_t packetLength) {
+    constexpr uint8_t CONFIG_HEADER_SIZE = 3;
+    constexpr uint8_t CONFIG_ENTRY_SIZE = sizeof(ConfigKey) + sizeof(int32_t);
+    constexpr uint8_t MAX_CONFIG_ENTRIES = 9;
 
+    usb_message_t response{};
+    response.configResponse.version = CONFIG_VERSION;
+    response.configResponse.operation = ConfigOp::SET_RESPONSE;
+    response.configResponse.length = 0;
+    response.configResponse.result = ConfigResult::OK;
 
+    if (msg.config.version != CONFIG_VERSION) {
+        response.configResponse.result = ConfigResult::UNKNOWN_VERSION;
+        usb_send(response, usb_message_types::CONFIG, 4);
+        return;
+    }
+
+    const uint8_t entryCount = msg.config.length;
+    const uint8_t expectedLength = CONFIG_HEADER_SIZE + entryCount * CONFIG_ENTRY_SIZE;
+    if (entryCount == 0 || packetLength != expectedLength) {
+        response.configResponse.result = ConfigResult::INVALID_VALUE;
+        usb_send(response, usb_message_types::CONFIG, 4);
+        return;
+    }
+
+    if (msg.config.state.operation == ConfigOp::READ) {
+        constexpr uint8_t MAX_READ_CONFIG_ENTRIES = 8;
+        usb_message_t readResponse{};
+        readResponse.configReadResponse.version = CONFIG_VERSION;
+        readResponse.configReadResponse.operation = ConfigOp::READ_RESPONSE;
+        readResponse.configReadResponse.length = 0;
+        readResponse.configReadResponse.result = ConfigResult::OK;
+
+        if (entryCount > MAX_READ_CONFIG_ENTRIES) {
+            readResponse.configReadResponse.result = ConfigResult::INVALID_VALUE;
+            usb_send(readResponse, usb_message_types::CONFIG, 4);
+            return;
+        }
+
+        const uint8_t* data = msg.raw + CONFIG_HEADER_SIZE;
+        for (uint8_t i = 0; i < entryCount; ++i) {
+            const size_t offset = static_cast<size_t>(i) * CONFIG_ENTRY_SIZE;
+            const uint16_t rawKey = static_cast<uint16_t>(data[offset]) |
+                (static_cast<uint16_t>(data[offset + 1]) << 8);
+            ConfigResult result = ConfigResult::OK;
+            const ConfigKey key = static_cast<ConfigKey>(rawKey);
+
+            readResponse.configReadResponse.statuses[i].key = key;
+            readResponse.configReadResponse.statuses[i].value =
+                config_read(key, result);
+            readResponse.configReadResponse.statuses[i].result = result;
+        }
+
+        readResponse.configReadResponse.length = entryCount;
+        const uint8_t responseLength = 4 +
+            entryCount * sizeof(usb_config_read_status);
+        usb_send(readResponse, usb_message_types::CONFIG, responseLength);
+        return;
+    }
+
+    if (msg.config.state.operation != ConfigOp::SET) {
+        response.configResponse.result = ConfigResult::UNKNOWN_OP;
+        usb_send(response, usb_message_types::CONFIG, 4);
+        return;
+    }
+
+    if (entryCount > MAX_CONFIG_ENTRIES) {
+        response.configResponse.result = ConfigResult::INVALID_VALUE;
+        usb_send(response, usb_message_types::CONFIG, 4);
+        return;
+    }
+
+    ConfigUpdate updates[MAX_CONFIG_ENTRIES];
+    ConfigResult results[MAX_CONFIG_ENTRIES];
+    const uint8_t* data = msg.raw + CONFIG_HEADER_SIZE;
+    for (uint8_t i = 0; i < entryCount; ++i) {
+        const size_t offset = static_cast<size_t>(i) * CONFIG_ENTRY_SIZE;
+        const uint16_t rawKey = static_cast<uint16_t>(data[offset]) |
+            (static_cast<uint16_t>(data[offset + 1]) << 8);
+        const uint32_t rawValue = static_cast<uint32_t>(data[offset + 2]) |
+            (static_cast<uint32_t>(data[offset + 3]) << 8) |
+            (static_cast<uint32_t>(data[offset + 4]) << 16) |
+            (static_cast<uint32_t>(data[offset + 5]) << 24);
+
+        updates[i] = {static_cast<ConfigKey>(rawKey),
+                      static_cast<int32_t>(rawValue)};
+        response.configResponse.statuses[i].key = updates[i].key;
+    }
+
+    config_set_batch(updates, results, entryCount);
+    response.configResponse.length = entryCount;
+    for (uint8_t i = 0; i < entryCount; ++i) {
+        response.configResponse.statuses[i].result = results[i];
+    }
+
+    const uint8_t responseLength = 4 +
+        entryCount * sizeof(usb_config_status);
+    usb_send(response, usb_message_types::CONFIG, responseLength);
 }
