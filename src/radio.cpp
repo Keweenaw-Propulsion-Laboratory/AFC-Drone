@@ -30,9 +30,13 @@ constexpr float RSSI_ALPHA = 0.1f;
 
 uint32_t lastTxTime = 0; /** Last transmission time */
 
+static constexpr uint8_t TX_SIZE = 16;
+static constexpr uint8_t RX_SIZE = 16;
 
-static Circular_Buffer<radio_Packet, 16> radio_tx_buffer; // 16 message tx buffer
-static Circular_Buffer<radio_Packet, 16> radio_rx_buffer; // 16 message rx buffer
+static Circular_Buffer<radio_Packet, TX_SIZE> radio_tx_buffer; // 16 message tx buffer
+static Circular_Buffer<radio_Packet, RX_SIZE> radio_rx_buffer; // 16 message rx buffer
+
+static uint16_t tx_dropped = 0; /** Number of dropped tx packets */
 
 radio_SetupStates setupState = radio_SetupStates::RESET1;
 
@@ -72,11 +76,11 @@ bool radio_setup() {
             break;
         
         case radio_SetupStates::RESET2 :
-            if (millis() > (setupTimmer + 10)){
+            if (millis() - 10 >= setupTimmer){
                 digitalWrite(RFM69_RST, LOW);
             }
 
-            if (millis() > setupTimmer + 20){
+            if (millis() - 20 >= setupTimmer){
                 setupState = radio_SetupStates::RADIO_INIT;
                 usb_send_text("Radio Reset", 11);
             }
@@ -269,7 +273,11 @@ void radio_update() {
 
 /** Adds message to radio queue */
 void radio_sendMessage(radio_Message data, radio_MessageType type) {
+    if (radio_tx_buffer.size() >= TX_SIZE)
+        tx_dropped++;
+
     radio_tx_buffer.push_back({data, type});
+ 
 }
 
 // MARK: Status Senders
@@ -280,7 +288,6 @@ void radio_sendStatus0() {
     msg.status0.loopTimeAvg = drone_rollAvg;
     msg.status0.loopTimeMax = Drone::worstTime;
     msg.status0.RunTime = millis() / 1000;
-    msg.status0.rssi = radio_avgRSSI;
     msg.status0.currentMode = (uint8_t) Drone::state;
 
     radio_sendMessage( msg, radio_MessageType::STATUS0);
@@ -302,7 +309,8 @@ void radio_sendStatus2() {
     
     msg.status2.motor1set = motor_bottomSetSpeed;
     msg.status2.motor2set = motor_topSetSpeed;
-    msg.status2.voltage = 0;
+    msg.status2.voltage = 0; // TODO connect to battery monitor @crheilma-code
+    msg.status2.rssi = radio_avgRSSI;
 
     radio_sendMessage(msg, radio_MessageType::STATUS2);
 

@@ -1,3 +1,5 @@
+#pragma once
+
 #include <Adafruit_BNO08x.h>
 
 #define GYRO_RESET -1

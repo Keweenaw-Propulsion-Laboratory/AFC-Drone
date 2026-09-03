@@ -38,6 +38,7 @@ bool drone_activeSlot = 0;
 bool Drone::startup() {
     // Step 1 Radio
     usb_update(); // Update the USB stack to allow for prints
+    updateLEDS(); // Update status LEDS
 
     switch (state)
     {

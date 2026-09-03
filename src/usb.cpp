@@ -232,7 +232,7 @@ static bool usb_is_valid_rx_header(const usb_header_t& header) {
  */
 void usb_update() {
 
-    if (!Serial && !config_get().usbRelayEnabled) {
+    if (!Serial) {
         return;
     }
 

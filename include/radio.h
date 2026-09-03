@@ -1,3 +1,5 @@
+#pragma once
+
 #include "RH_RF69.h"
 #include "configs.h"
 
@@ -46,8 +48,8 @@ extern int16_t radio_avgRSSI;
             uint16_t loopTimeAvg; // Average loop time in micros
             uint16_t loopTimeMax; // Max loop time in micros
             uint16_t RunTime; // Time that the vehicle has been powered on in seconds
-            uint8_t rssi; // The strength of the radio connection
             uint8_t currentMode; // The current mode that the vehicle is in. 
+            uint8_t empty; // Reserved
         };
 
         struct __attribute__((packed)) StatusMsg1_t {
@@ -62,7 +64,7 @@ extern int16_t radio_avgRSSI;
             uint16_t motor1set; // Motor 1 set point
             uint16_t motor2set; // Motor 2 set point
             uint16_t voltage; // Current voltage of the battery. 
-            uint16_t empty; // Reserved
+            uint16_t rssi; // The strength of the radio connection
         };
 
         struct __attribute__((packed)) StatusMsg3_t {

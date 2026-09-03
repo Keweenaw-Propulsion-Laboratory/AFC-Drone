@@ -1,3 +1,5 @@
+#pragma once
+
 #define STATUS_LED -1
 #include <Arduino.h>
 #include <cstdint>

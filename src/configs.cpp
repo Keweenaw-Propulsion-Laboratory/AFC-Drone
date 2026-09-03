@@ -26,9 +26,9 @@ PersistentConfig defaults()
         true,           // Radio enabled
         true,           // Skip radio handshake
         20,             // Radio transmit power
-        90,
+        90, // Gimbal Offset
         89, // Gimbal Offset
-        0,
+        0,  // Motor Offset
         0, // Motor Offset
 
     };
@@ -110,6 +110,9 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
     case ConfigKey::DebugMode:
         if (value != 0 && value != 1 )
             return ConfigResult::INVALID_VALUE;
+        changed = config.debugMode != static_cast<bool>(value);
+        config.debugMode = static_cast<bool>(value);    
+        
     case ConfigKey::TxPowerDbm:
         if (value < 14 || value > 20)
             return ConfigResult::INVALID_VALUE;

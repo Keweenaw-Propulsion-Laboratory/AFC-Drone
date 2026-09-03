@@ -1,3 +1,4 @@
+#pragma once
 #include "Arduino.h"
 
 // These are defined in radio.h.  Forward declarations keep usb.h independent
