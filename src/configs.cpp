@@ -107,6 +107,9 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
 {
     switch (key)
     {
+    case ConfigKey::DebugMode:
+        if (value != 0 && value != 1 )
+            return ConfigResult::INVALID_VALUE;
     case ConfigKey::TxPowerDbm:
         if (value < 14 || value > 20)
             return ConfigResult::INVALID_VALUE;

@@ -1,4 +1,4 @@
-#define STATUS_LED 10
+#define STATUS_LED -1
 #include <Arduino.h>
 #include <cstdint>
 

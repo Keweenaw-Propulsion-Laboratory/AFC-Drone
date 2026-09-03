@@ -2,6 +2,8 @@
 #include "Arduino.h"
 #include <cstring>
 #include "circular_buffer.h"
+#include <bit>
+#include <cstdint>
 
 #include "error.h"
 #include "drone.h"
@@ -10,6 +12,8 @@
 #include "usb.h"
 #include "motor.h"
 #include "configs.h"
+
+// constexpr ACK ack = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
 
 /**Minimum time to wait in ms between transmissions */
 constexpr uint32_t RX_WINDOW_MIN = 10;
@@ -132,34 +136,9 @@ bool radio_setup() {
         break;
         }
         case radio_SetupStates::WAIT_ACK : {
-            
-            // // Check for ack
-            // uint8_t recvBuffer[RH_RF69_MAX_MESSAGE_LEN];
-            // uint8_t buffLength;
+            // Update radio stack until message is received. 
+            radio_update();
 
-            
-            // // Check if there is an ack waiting
-            // if (!radio_getMessage(recvBuffer, buffLength)) {
-            //     // Go back to sending a message if the ack hasnt been received after 1 second
-            //     if(millis() > setupTimmer + 1000) {
-            //         setupTimmer = millis();
-            //         usb_send_text("BaseStation not connected. Retrying... #", 40);
-            //         // Debug::println(retryCounter++);
-
-            //         setupState = radio_SetupStates::SEND_CONN;
-            //     }
-            //     return true; // Return back to loop
-            // }
-
-            // // Check if correct ack was recieved 
-            // if ((buffLength == 8) && (recvBuffer[0] == ACK[0])){
-            //     // Update state to complete the radio init
-            //     usb_send_text("BaseStation CONNECTED", 21);
-                
-            //     setupState = radio_SetupStates::COMPLETE;
-            //     return true;
-            // }
-            // Return to loop
             return true;
             break;
         }
@@ -229,7 +208,11 @@ void radio_update() {
                 switch (static_cast<radio_MessageType>(header.packetType))
                 {
                 case radio_MessageType::SETUP :
-                    /* code */
+                    if (setupState == radio_SetupStates::WAIT_ACK) {
+                        if (msg.raw == ack.raw) {
+                            setupState = radio_SetupStates::COMPLETE;
+                        }
+                    }
                     break;
                 
                 case radio_MessageType::COMMAND :

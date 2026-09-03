@@ -37,7 +37,8 @@ bool drone_activeSlot = 0;
  */
 bool Drone::startup() {
     // Step 1 Radio
-    
+    usb_update(); // Update the USB stack to allow for prints
+
     switch (state)
     {
     case DroneStates::BOOT:
@@ -46,18 +47,18 @@ bool Drone::startup() {
         
         // Transition to next state
         state = DroneStates::RADIO_SETUP;
-        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP", 49);
+        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP", 50);
         break;
     
     case DroneStates::RADIO_SETUP :
         if(!radio_setup()) {
             state = DroneStates::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP", 41);
+            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP", 42);
         }
 
         if (radio_setupComplete()) {
             state = DroneStates::SENSOR_SETUP;
-            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP", 57);
+            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP", 58);
         }
         break;
 
@@ -67,17 +68,17 @@ bool Drone::startup() {
         // Run setup functions here
         if (!Gyro::setup()) {
             state = DroneStates::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO", 50);
+            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO", 51);
         }
 
         // if (!GPS::setup()) {
         //     state = DroneStates::FAULT_ERROR;
-        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS", 49)
+        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS", 50)
         // }
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
-            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED", 57);
+            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED", 58);
             state = DroneStates::CONTROL_SETUP;
         }
 
@@ -88,13 +89,17 @@ bool Drone::startup() {
         motor_setup();
         startControlTimer();
         state = DroneStates::READY_ARMED;
-
+        break;
+    
+    case DroneStates::FAULT_ERROR :
+        usb_send_text("FAULT", 6);
+        
     default:
         break;
     }
 
     if (state == DroneStates::READY_ARMED){
-        usb_send_text("Drone ARMED", 11);
+        usb_send_text("Drone ARMED", 12);
         return true;
     }
 
@@ -220,7 +225,7 @@ void Drone::ledFader() {
     
     // Output a true hardware PWM duty cycle to your fade pin
     // Note: Make sure your chosen LED pin supports PWM! (On Teensy 4.1, almost all pins do)
-    analogWrite(LED_BUILTIN, (int)smoothValue);
+    analogWrite(STATUS_LED, (int)smoothValue);
     return; // Exit early so standard blinking code below doesn't override this
 }
 
@@ -232,19 +237,19 @@ const uint32_t cycleDuration = 1200; // Total duration of the pattern in ms
 
         if (currentCycleTime < 100) {
             // 0ms to 99ms -> First Strobe
-            digitalWrite(LED_BUILTIN, HIGH);
+            digitalWrite(STATUS_LED, HIGH);
         } 
         else if (currentCycleTime >= 100 && currentCycleTime < 250) {
             // 100ms to 249ms -> Dark gap
-            digitalWrite(LED_BUILTIN, LOW);
+            digitalWrite(STATUS_LED, LOW);
         } 
         else if (currentCycleTime >= 250 && currentCycleTime < 350) {
             // 250ms to 349ms -> Second Strobe
-            digitalWrite(LED_BUILTIN, HIGH);
+            digitalWrite(STATUS_LED, HIGH);
         } 
         else {
             // 350ms to 1199ms -> Long dark pause before cycle resets
-            digitalWrite(LED_BUILTIN, LOW);
+            digitalWrite(STATUS_LED, LOW);
         }
         
 }

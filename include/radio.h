@@ -194,8 +194,9 @@ extern int16_t radio_avgRSSI;
          */
         void radio_update();
         
+    union ACK {
+        uint8_t array[8];
+        uint64_t raw;
+    };
 
-    // acknowledgement for a message.  
-    static constexpr uint8_t ACK[8] = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
-        
-
+    inline constexpr ACK ack = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
