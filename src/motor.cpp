@@ -27,12 +27,17 @@ void motor_setup() {
 
 void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
-    motor_topSetSpeed = (int)topMotorSpeed + config_get().motor1offset;
-    motor_bottomSetSpeed = (int)bottomMotorSpeed + config_get().motor2offset;
-    
-    // Clamp the motor set speed to be between 0 and 255
-    motor_topSetSpeed = motor_topSetSpeed <= 0 ? 0 : motor_topSetSpeed > 255 ? 255 : motor_topSetSpeed;
-    motor_bottomSetSpeed = motor_bottomSetSpeed <= 0 ? 0 : motor_bottomSetSpeed > 255 ? 255 : motor_bottomSetSpeed;
+    // Clamp in signed space. The trim offset is signed, so the sum must stay
+    // signed until it is known to be in range - narrowing first would wrap a
+    // small negative result up to a near-maximum throttle.
+    int top = (int)topMotorSpeed + config_get().motor1offset;
+    int bottom = (int)bottomMotorSpeed + config_get().motor2offset;
+
+    if (top < 0) top = 0; else if (top > 255) top = 255;
+    if (bottom < 0) bottom = 0; else if (bottom > 255) bottom = 255;
+
+    motor_topSetSpeed = (uint16_t)top;
+    motor_bottomSetSpeed = (uint16_t)bottom;
 
 
     uint16_t bottomSpeed =

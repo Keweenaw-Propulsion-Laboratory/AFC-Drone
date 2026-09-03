@@ -2,7 +2,6 @@
 #include "Arduino.h"
 #include <cstring>
 #include "circular_buffer.h"
-#include <bit>
 #include <cstdint>
 
 #include "error.h"
@@ -12,8 +11,6 @@
 #include "usb.h"
 #include "motor.h"
 #include "configs.h"
-
-// constexpr ACK ack = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
 
 /**Minimum time to wait in ms between transmissions */
 constexpr uint32_t RX_WINDOW_MIN = 10;
@@ -40,7 +37,14 @@ static uint16_t tx_dropped = 0; /** Number of dropped tx packets */
 
 radio_SetupStates setupState = radio_SetupStates::RESET1;
 
-int retryCounter = 0;
+/** Stage 2 state: whether the base station has answered our connection ping. */
+static radio_LinkStates linkState = radio_LinkStates::DISCONNECTED;
+static uint32_t lastLinkPingTime = 0;
+
+/** How long to wait for an ACK before re-sending the connection ping. */
+static constexpr uint32_t LINK_RETRY_MS = 1000;
+
+static void radio_updateLink();
 
 void radio_handleCommand(radio_Message msg);
 void radio_handleConfig(radio_Message msg);
@@ -76,13 +80,13 @@ bool radio_setup() {
             break;
         
         case radio_SetupStates::RESET2 :
-            if (millis() - 10 >= setupTimmer){
+            if (millis() - setupTimmer >= 10){
                 digitalWrite(RFM69_RST, LOW);
             }
 
-            if (millis() - 20 >= setupTimmer){
+            if (millis() - setupTimmer >= 20){
                 setupState = radio_SetupStates::RADIO_INIT;
-                usb_send_text("Radio Reset", 11);
+                usb_send_text("Radio Reset");
             }
             return true;
 
@@ -91,7 +95,7 @@ bool radio_setup() {
         case radio_SetupStates::RADIO_INIT :
             if( !radio.init() ) {
                 ErrorHandler::addError(ErrorHandler::radioInitFail);
-                usb_send_text("Radio start failed", 18);
+                usb_send_text("Radio start failed");
                 return false;
             }
 
@@ -102,7 +106,7 @@ bool radio_setup() {
         case radio_SetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-                    usb_send_text("failed to set radio freq", 24);
+                    usb_send_text("failed to set radio freq");
                     return false;
                 }
 
@@ -115,37 +119,14 @@ bool radio_setup() {
                 // Power range is between 14 and 20dbm. 
                 // This is the high power variant and we need to enable the high power antenna. 
                 
-                setupState = radio_SetupStates::SEND_CONN;
-                return true;
-        }
-            break;
-        
-        case radio_SetupStates::SEND_CONN : {
-            
-            if (config_get().skipRadioHandshake) {
+                // Hardware is configured, which is as far as the boot state
+                // machine needs to get. Finding the base station is stage 2 and
+                // continues in the background from radio_update().
                 setupState = radio_SetupStates::COMPLETE;
                 return true;
-            }
-
-            setupTimmer = millis(); // Record time of sent connection ping
-            
-            radio_Message conn;
-            memcpy(conn.textArray, "AFCDrone", 8);
-
-            radio_sendMessage(conn, radio_MessageType::SETUP);
-            
-            setupState = radio_SetupStates::WAIT_ACK;
-            return true;
-        
-        break;
         }
-        case radio_SetupStates::WAIT_ACK : {
-            // Update radio stack until message is received. 
-            radio_update();
-
-            return true;
             break;
-        }
+
         default :
             break;
     }
@@ -158,6 +139,44 @@ bool radio_setupComplete() {
     return setupState == radio_SetupStates::COMPLETE;
 }
 
+bool radio_linkConnected() {
+    return linkState == radio_LinkStates::CONNECTED;
+}
+
+/**
+ * Stage 2 of bring-up: poll for the base station without blocking anything.
+ *
+ * Sends a connection ping, then re-sends it every LINK_RETRY_MS until the base
+ * station answers with the ACK pattern. The vehicle arms and flies regardless of
+ * whether this ever succeeds, and a link that drops later is retried from here
+ * rather than requiring a reboot.
+ */
+static void radio_updateLink() {
+    // The handshake is opt-out; treat it as already satisfied when skipped so
+    // radio_linkConnected() still reports something meaningful to telemetry.
+    if (config_get().skipRadioHandshake) {
+        linkState = radio_LinkStates::CONNECTED;
+        return;
+    }
+
+    if (linkState == radio_LinkStates::CONNECTED) {
+        return;
+    }
+
+    // Only the first ping is immediate; after that we retry on a fixed cadence.
+    if (linkState == radio_LinkStates::AWAITING_ACK &&
+        millis() - lastLinkPingTime < LINK_RETRY_MS) {
+        return;
+    }
+
+    radio_Message conn{};
+    memcpy(conn.textArray, "AFCDrone", 8);
+    radio_sendMessage(conn, radio_MessageType::SETUP);
+
+    lastLinkPingTime = millis();
+    linkState = radio_LinkStates::AWAITING_ACK;
+}
+
 // MARK: Periodic Update
 void radio_update() {
     if (!config_get().radioEnabled)
@@ -168,6 +187,10 @@ void radio_update() {
 
     // Only run radio if setup has been completed. 
     if (radio_setupComplete()) {
+
+        // Stage 2: keep looking for the base station. Runs alongside normal
+        // traffic and never gates arming or the control loop.
+        radio_updateLink();
 
         // Check if radio has available packets
         if (radio.available()) {
@@ -212,10 +235,13 @@ void radio_update() {
                 switch (static_cast<radio_MessageType>(header.packetType))
                 {
                 case radio_MessageType::SETUP :
-                    if (setupState == radio_SetupStates::WAIT_ACK) {
-                        if (msg.raw == ack.raw) {
-                            setupState = radio_SetupStates::COMPLETE;
-                        }
+                    // The base station answers our connection ping with the ACK
+                    // pattern. Accept it whenever it arrives, so a link that
+                    // comes back after a dropout reconnects on its own.
+                    if (msg.raw == ack.raw &&
+                        linkState != radio_LinkStates::CONNECTED) {
+                        linkState = radio_LinkStates::CONNECTED;
+                        usb_send_text("BaseStation CONNECTED");
                     }
                     break;
                 

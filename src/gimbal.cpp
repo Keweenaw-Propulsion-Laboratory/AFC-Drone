@@ -36,11 +36,11 @@ void Gimbal::set(float pitch, float yaw) {
 
     // Clamp the pitch inputs
     if (pitch < pitchValues[0]) pitch = pitchValues[0];
-    if (pitch > pitchValues[PITCH_ROWS-1]) pitch = pitchValues[PITCH_ROWS-1];
+    if (pitch > pitchValues[PITCH_COLS-1]) pitch = pitchValues[PITCH_COLS-1];
 
     // Clamp the yaw inputs
     if (yaw < yawValues[0]) yaw = yawValues[0];
-    if (yaw > yawValues[YAW_COLS-1]) yaw = yawValues[YAW_COLS-1];
+    if (yaw > yawValues[YAW_ROWS-1]) yaw = yawValues[YAW_ROWS-1];
 
     // Map the pitch and yaw to the nearest index
 
@@ -50,8 +50,8 @@ void Gimbal::set(float pitch, float yaw) {
     uint8_t column = (uint8_t) ((pitch + 20) / 5);
 
     // Clamp the row index to not go out of bounds
-    if (row > YAW_COLS - 2) row = YAW_COLS - 2;
-    if (column > PITCH_ROWS - 2) column = PITCH_ROWS - 2;
+    if (row > YAW_ROWS - 2) row = YAW_ROWS - 2;
+    if (column > PITCH_COLS - 2) column = PITCH_COLS - 2;
 
     // Calculate how close the original command was to a precalculated command
     float y_frac = (pitch - pitchValues[column]) / (pitchValues[column + 1] - pitchValues[column]);

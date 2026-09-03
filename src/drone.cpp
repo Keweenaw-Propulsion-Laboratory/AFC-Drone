@@ -48,18 +48,18 @@ bool Drone::startup() {
         
         // Transition to next state
         state = DroneStates::RADIO_SETUP;
-        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP", 50);
+        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP");
         break;
     
     case DroneStates::RADIO_SETUP :
         if(!radio_setup()) {
             state = DroneStates::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP", 42);
+            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP");
         }
 
         if (radio_setupComplete()) {
             state = DroneStates::SENSOR_SETUP;
-            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP", 58);
+            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
         }
         break;
 
@@ -69,17 +69,17 @@ bool Drone::startup() {
         // Run setup functions here
         if (!Gyro::setup()) {
             state = DroneStates::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO", 51);
+            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
         }
 
         // if (!GPS::setup()) {
         //     state = DroneStates::FAULT_ERROR;
-        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS", 50)
+        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS")
         // }
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
-            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED", 58);
+            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
             state = DroneStates::CONTROL_SETUP;
         }
 
@@ -92,15 +92,27 @@ bool Drone::startup() {
         state = DroneStates::READY_ARMED;
         break;
     
-    case DroneStates::FAULT_ERROR :
-        usb_send_text("FAULT", 6);
-        
+    case DroneStates::FAULT_ERROR : {
+        // startup() is called from a tight while() loop, so an unthrottled
+        // message here would saturate the USB tx buffer and starve every other
+        // frame. Once a second is enough to make the fault visible.
+        static uint32_t lastFaultMs = 0;
+        static bool faultReported = false;
+        const uint32_t nowMs = millis();
+        if (!faultReported || nowMs - lastFaultMs >= 1000) {
+            usb_send_text("FAULT");
+            lastFaultMs = nowMs;
+            faultReported = true;
+        }
+        break;
+    }
+
     default:
         break;
     }
 
     if (state == DroneStates::READY_ARMED){
-        usb_send_text("Drone ARMED", 12);
+        usb_send_text("Drone ARMED");
         return true;
     }
 

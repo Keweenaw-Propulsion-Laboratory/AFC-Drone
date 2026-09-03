@@ -14,20 +14,44 @@ extern int16_t radio_avgRSSI;
 
 
         /**
-        * Keeps track of the different stages of Radio setup
+        * Stage 1 of radio bring-up: getting the RFM69 itself configured.
+        *
+        * This is the only part the boot state machine blocks on. It talks to
+        * local hardware only, so it either completes in a few milliseconds or
+        * fails outright - it can never stall waiting on another vehicle.
         */
         enum class radio_SetupStates : uint8_t{
             RESET1,
             RESET2,
             RADIO_INIT,
             SET_CONFIG,
-            SEND_CONN,
-            WAIT_ACK,
             COMPLETE
         };
 
+        /**
+        * Stage 2 of radio bring-up: finding the base station.
+        *
+        * This runs in the background from radio_update() and is deliberately
+        * NOT part of radio_setupComplete(). Losing or never finding the base
+        * station must not keep the vehicle from arming, so the drone reaches
+        * READY_ARMED regardless of what this reports.
+        */
+        enum class radio_LinkStates : uint8_t{
+            DISCONNECTED, // No ping outstanding; next poll will send one
+            AWAITING_ACK, // Ping sent, waiting for the base station to answer
+            CONNECTED     // Base station has acknowledged
+        };
+
         bool radio_setup();
+
+        /**
+         * True once the RFM69 is configured and able to send and receive.
+         * Does NOT imply a base station is listening - see radio_linkConnected().
+         */
         bool radio_setupComplete();
+
+        /** True once the base station has acknowledged our connection ping. */
+        bool radio_linkConnected();
 
         enum class RadioStates : uint8_t{
             HARDWARE_INIT,

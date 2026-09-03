@@ -112,6 +112,7 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
             return ConfigResult::INVALID_VALUE;
         changed = config.debugMode != static_cast<bool>(value);
         config.debugMode = static_cast<bool>(value);    
+        break;
         
     case ConfigKey::TxPowerDbm:
         if (value < 14 || value > 20)

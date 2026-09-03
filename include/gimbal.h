@@ -8,9 +8,11 @@
 #define PITCH_SERVO_PIN 24
 #define YAW_SERVO_PIN 25
 
-// Number of measure pitch and yaw points in the loop up tables
-#define PITCH_ROWS 9
-#define YAW_COLS 9
+// Extents of the servo lookup tables, which are transcribed straight from
+// docs/ServoLookupTable.csv. That sheet is laid out one ROW per yaw setpoint
+// and one COLUMN per pitch setpoint, so the maps are indexed [yaw][pitch].
+#define YAW_ROWS 9
+#define PITCH_COLS 9
 
 
 extern float gimbal_topServo;
@@ -56,10 +58,10 @@ class Gimbal {
 
         // MARK: Lookup table for gimbal correction
 
-        static constexpr float pitchValues[PITCH_ROWS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
-        static constexpr float yawValues[YAW_COLS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
+        static constexpr float pitchValues[PITCH_COLS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
+        static constexpr float yawValues[YAW_ROWS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
 
-        static constexpr float topServoMap[PITCH_ROWS][YAW_COLS] = {
+        static constexpr float topServoMap[YAW_ROWS][PITCH_COLS] = {
             {-1.306221,     5.164407,   11.298533,  17.210218,  23.018482,  16.95216,   11.170965,  5.554293,   0},
             {-6.744026,     -0.423434,  5.579505,   11.3642,    16.95216,   11.3642,    5.711151,   -0.155048,  -5.272502},
             {-12.11768,     -5.909759,  0,          5.711151,   11.170965,  5.512334,   0,          -5.711151,  -10.928924},
@@ -71,7 +73,7 @@ class Gimbal {
             {0,             5.554293,   11.170965,  16.95216,   -23.018482, -17.210218, -11.298533, -5.164407,  1.306221}
         };
 
-        static constexpr float bottomServoMap[PITCH_ROWS][YAW_COLS] = {
+        static constexpr float bottomServoMap[YAW_ROWS][PITCH_COLS] = {
             {-42.129333,    -36.747015, -31.198556,-25.576657,-20.467741,-15.836313,-10.753458,-5.420747,0},
             {-37.334843,    -32.062079, -26.586062,-21.008485,-15.836313,-21.008485,-15.937261,-10.598426,-5.498094},
             {-31.979404,    -26.824999, -21.443005,-15.937261,-10.753458,-21.443005,-21.443005,-15.937261,-10.949558},
