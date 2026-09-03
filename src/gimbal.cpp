@@ -45,10 +45,13 @@ void Gimbal::set(float pitch, float yaw) {
     // Map the pitch and yaw to the nearest index
 
     // The row that the setpoint is in.
-    uint8_t row = (uint8_t) (yaw + 20) / 5;
+    uint8_t row = (uint8_t) ((yaw + 20) / 5);
     // The column that the setpoint is in
-    uint8_t column = (uint8_t) (pitch + 20) / 5;
+    uint8_t column = (uint8_t) ((pitch + 20) / 5);
 
+    // Clamp the row index to not go out of bounds
+    if (row > YAW_COLS - 2) row = YAW_COLS - 2;
+    if (column > PITCH_ROWS - 2) column = PITCH_ROWS - 2;
 
     // Calculate how close the original command was to a precalculated command
     float y_frac = (pitch - pitchValues[column]) / (pitchValues[column + 1] - pitchValues[column]);
