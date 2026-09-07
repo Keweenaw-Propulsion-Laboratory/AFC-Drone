@@ -132,8 +132,8 @@ extern int16_t radio_avgRSSI;
             } flags;
             int16_t gimbalX;
             int16_t gimbalY;
-            uint8_t motor0Speed;
-            uint8_t motor1Speed;
+            uint8_t bottomMotor;
+            uint8_t topMotor;
             uint8_t empty0; // Unused command field
 
         };

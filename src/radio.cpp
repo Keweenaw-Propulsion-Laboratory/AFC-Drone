@@ -390,22 +390,18 @@ void radio_sendStatus6() {
 
 // MARK: Message Handlers
 
+/**
+ * Handle incoming flight commands from the base station. 
+ */
 void radio_handleCommand(radio_Message msg) {
 
-// Sets a target position
-    if (msg.command.flags.targSlot == 0) {
-        drone_targ0.gimbalX = msg.command.gimbalX;
-        drone_targ0.gimbalY = msg.command.gimbalY;
-        drone_targ0.motor0Speed = msg.command.motor0Speed;
-        drone_targ0.motor1Speed = msg.command.motor1Speed;
-    } else {
-        drone_targ1.gimbalX = msg.command.gimbalX;
-        drone_targ1.gimbalY = msg.command.gimbalY;
-        drone_targ1.motor0Speed = msg.command.motor0Speed;
-        drone_targ1.motor1Speed = msg.command.motor1Speed;
-    }
+    Drone::Target_t target;
+    target.gimbalX = msg.command.gimbalX;
+    target.gimbalY = msg.command.gimbalY;
+    target.bottomMotor = msg.command.bottomMotor;
+    target.topMotor = msg.command.topMotor;
 
-    drone_activeSlot = msg.command.flags.activeSlot;
+    Drone::setTarget(target);
 
 }
 

@@ -68,7 +68,7 @@ void Gimbal::setup() {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setTopServo(float angle) {
-    gimbal_topServo = limitRange(angle + Configs::config_get().gimbalPitchOffset, 60 , 120);
+    gimbal_topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
 
     pitchServo.write(gimbal_topServo);   
 }
@@ -79,7 +79,7 @@ void setTopServo(float angle) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setBotServo(float angle) {
-    gimbal_botServo = limitRange( -angle + Configs::config_get().gimbalYawOffset, 60, 120);
+    gimbal_botServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
     yawServo.write(gimbal_botServo);
 }
 

@@ -14,7 +14,7 @@
 #define LOOP_STATUS_INTERVAL 2000 // 2000 ms
 
 void setup() {
-    config_load(); // Load configs from flash
+    Configs::load(); // Load configs from flash
 
     while (!Drone::startup()) {}
 
@@ -53,7 +53,7 @@ void loop() {
         }
 
         Drone::lastLoopTime = static_cast<uint16_t>(currentLoopCost);
-        drone_rollAvg = static_cast<uint16_t>(rollingAverage);
+        Drone::rollAvg = static_cast<uint16_t>(rollingAverage);
         if (Drone::lastLoopTime > Drone::worstTime) {Drone::worstTime = Drone::lastLoopTime;}
         if (Drone::lastLoopTime < Drone::bestTime) {Drone::bestTime = Drone::lastLoopTime;}
     }

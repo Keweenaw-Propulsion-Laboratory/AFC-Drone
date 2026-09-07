@@ -35,8 +35,8 @@ struct __attribute__((packed)) usb_command_t {
     } flags;
     int16_t gimbalX;
     int16_t gimbalY;
-    uint8_t motor0Speed;
-    uint8_t motor1Speed;
+    uint8_t bottomMotor;
+    uint8_t topMotor;
     uint8_t empty0; // Unused command field
 };
 
@@ -341,13 +341,13 @@ void usb_update() {
             if (pkt.data.command.flags.targSlot == 0) {
                 drone_targ0.gimbalX = pkt.data.command.gimbalX;
                 drone_targ0.gimbalY = pkt.data.command.gimbalY;
-                drone_targ0.motor0Speed = pkt.data.command.motor0Speed;
-                drone_targ0.motor1Speed = pkt.data.command.motor1Speed;
+                drone_targ0.bottomMotor = pkt.data.command.bottomMotor;
+                drone_targ0.topMotor = pkt.data.command.topMotor;
             } else {
                 drone_targ1.gimbalX = pkt.data.command.gimbalX;
                 drone_targ1.gimbalY = pkt.data.command.gimbalY;
-                drone_targ1.motor0Speed = pkt.data.command.motor0Speed;
-                drone_targ1.motor1Speed = pkt.data.command.motor1Speed;
+                drone_targ1.bottomMotor = pkt.data.command.bottomMotor;
+                drone_targ1.topMotor = pkt.data.command.topMotor;
             }
 
             drone_activeSlot = pkt.data.command.flags.activeSlot;
