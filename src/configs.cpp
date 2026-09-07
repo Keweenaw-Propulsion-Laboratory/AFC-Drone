@@ -4,8 +4,9 @@
 #include <cstring>
 #include "drone.h"
 
+using namespace Configs;
 static constexpr uint32_t CONFIG_MAGIC = 0x41455245; // AERE
-const uint8_t CONFIG_VERSION = 2;
+const uint8_t Configs::CONFIG_VERSION = 2;
 static constexpr int EEPROM_ADDRESS = 0;
 
 PersistentConfig config{};
@@ -78,10 +79,10 @@ static uint16_t checksum(ConfigT image)
     return sum;
 }
 
-void config_save()
+void Configs::save()
 {
     // If drone is inflight do run blocking save to EEPROM.
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+    if (Drone::state == Drone::States::FLIGHT)
     {
         return;
     }
@@ -92,7 +93,7 @@ void config_save()
     EEPROM.put(EEPROM_ADDRESS, config);
 }
 
-void config_load()
+void Configs::load()
 {
     PersistentConfig stored{};
     EEPROM.get(EEPROM_ADDRESS, stored);
@@ -114,7 +115,7 @@ void config_load()
     {
         // If values are unrecoverable reset to defaults.
         config = defaults();
-        config_save();
+        Configs::save();
     }
 }
 
@@ -132,7 +133,7 @@ PersistentConfig &config_mutableGet()
 void restoreDefaults()
 {
     config = defaults();
-    config_save();
+    Configs::save();
 }
 
 static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
@@ -211,7 +212,7 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
 
 ConfigResult config_set(ConfigKey key, int32_t value)
 {
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+    if (Drone::state == Drone::States::FLIGHT)
     {
         return ConfigResult::UNSAFE_STATE;
     }
@@ -221,7 +222,7 @@ ConfigResult config_set(ConfigKey key, int32_t value)
 
     if (changed)
     {
-        config_save();
+        Configs::save();
     }
 
     return result;
@@ -233,7 +234,7 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
     if (updates == nullptr)
         return;
 
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+    if (Drone::state == Drone::States::FLIGHT)
     {
         for (uint8_t i = 0; i < count; ++i)
         {
@@ -255,7 +256,7 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
     }
 
     if (anyChanged)
-        config_save();
+        Configs::save();
 }
 
 int32_t config_read(ConfigKey key, ConfigResult &status)
@@ -345,5 +346,5 @@ static void config_migrate(PersistentConfig &stored)
 
     config = stored;
     // Save migrated configs
-    config_save();
+    Configs::save();
 }
