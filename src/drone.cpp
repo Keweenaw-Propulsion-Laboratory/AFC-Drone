@@ -25,12 +25,12 @@ static volatile States state = States::BOOT;
 static uint16_t lastLoopTime = 0;
 static uint16_t worstTime = 0;
 static uint16_t bestTime = -1;
-static uint16_t drone_rollAvg = 0;
+uint16_t rollAvg = 0;
 
 // Set by the hardware timer ISR every CONTROL_LOOP_US. loop() polls this
 // and clears it before running the flight control algorithm, so the
 // algorithm itself always executes in normal (non-ISR) context.
-volatile bool controlTick = false;
+volatile bool Drone::controlTick = false;
 
 // Counts ticks where the previous one hadn't been serviced by loop() yet,
 // i.e. the flight control algorithm is taking longer than CONTROL_LOOP_US.
@@ -39,9 +39,7 @@ volatile uint32_t missedTicks = 0;
 // Hardware timer driving the control loop tick
 IntervalTimer controlTimer;
 
-static Target_t drone_targ0, drone_targ1;
-
-static bool drone_activeSlot = 0;
+static Target_t drone_targ0;
 
 // MARK: Helpers
 
@@ -194,7 +192,7 @@ bool Drone::startup() {
             usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP");
         }
 
-        if (radio_setupComplete()) {
+        if (Radio::setupComplete()) {
             state = States::SENSOR_SETUP;
             usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
         }
@@ -264,18 +262,17 @@ bool Drone::startup() {
  * Runs at main loop speed and is not controlled by ISR
  */
 void Drone::update() {
-    static Target_t* slot;
+    static Target_t activeSlot;
+    static constexpr float GIMBAL_INT16_TO_FLOAT = 1638.0f;
 
-    if (drone_activeSlot == 0) {
-        slot = &drone_targ0;
-    } else {
-        slot = &drone_targ1;
-    }
+    memcpy(&activeSlot, &drone_targ0, sizeof(Target_t));
 
     // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
-    Gimbal::set(slot->gimbalX / 1638.0f, slot->gimbalY / 1638.0f);
+    Gimbal::set(activeSlot.gimbalX / GIMBAL_INT16_TO_FLOAT, 
+                activeSlot.gimbalY / GIMBAL_INT16_TO_FLOAT);
 
-    motor_setMotor(slot->bottomMotor, slot->topMotor);
+    // Set motor set points
+    motor_setMotor(activeSlot.bottomMotor, activeSlot.topMotor);
 
 
     static uint32_t lastTelemetryMs = 0;
@@ -292,10 +289,6 @@ void Drone::update() {
         radio_sendStatus6();
         lastTelemetryMs = now;
     }
-
-
-
-
 }
 
 

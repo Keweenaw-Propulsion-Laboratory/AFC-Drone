@@ -12,11 +12,9 @@ namespace Drone {
         uint8_t topMotor;
     };
 
-    extern Target_t drone_targ0;
-    extern Target_t drone_targ1;
-    extern bool drone_activeSlot;
-
+    extern volatile bool controlTick;
     extern uint16_t rollAvg;
+
 
     enum class States: uint8_t {
         BOOT, 

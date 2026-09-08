@@ -82,7 +82,7 @@ static uint16_t checksum(ConfigT image)
 void Configs::save()
 {
     // If drone is inflight do run blocking save to EEPROM.
-    if (Drone::state == Drone::States::FLIGHT)
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         return;
     }
@@ -119,24 +119,20 @@ void Configs::load()
     }
 }
 
-const PersistentConfig &config_get()
-{
-
+const PersistentConfig &Configs::get() {
     return config;
 }
 
-PersistentConfig &config_mutableGet()
-{
+PersistentConfig &Configs::mutableGet() {
     return config;
 }
 
-void restoreDefaults()
-{
+void Configs::restoreDefaults() {
     config = defaults();
     Configs::save();
 }
 
-static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
+static ConfigResult apply(ConfigKey key, int32_t value, bool &changed)
 {
     switch (key)
     {
@@ -210,15 +206,14 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
     return ConfigResult::OK;
 }
 
-ConfigResult config_set(ConfigKey key, int32_t value)
-{
-    if (Drone::state == Drone::States::FLIGHT)
+ConfigResult Configs::set(ConfigKey key, int32_t value) {
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         return ConfigResult::UNSAFE_STATE;
     }
 
     bool changed = false;
-    const ConfigResult result = config_apply(key, value, changed);
+    const ConfigResult result = apply(key, value, changed);
 
     if (changed)
     {
@@ -228,13 +223,13 @@ ConfigResult config_set(ConfigKey key, int32_t value)
     return result;
 }
 
-void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
+void Configs::setBatch(const ConfigUpdate *updates, ConfigResult *results,
                       uint8_t count)
 {
     if (updates == nullptr)
         return;
 
-    if (Drone::state == Drone::States::FLIGHT)
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         for (uint8_t i = 0; i < count; ++i)
         {
@@ -248,7 +243,7 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
     for (uint8_t i = 0; i < count; ++i)
     {
         bool changed = false;
-        const ConfigResult result = config_apply(updates[i].key,
+        const ConfigResult result = apply(updates[i].key,
                                                  updates[i].value, changed);
         if (results != nullptr)
             results[i] = result;
@@ -259,7 +254,7 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
         Configs::save();
 }
 
-int32_t config_read(ConfigKey key, ConfigResult &status)
+int32_t Configs::read(ConfigKey key, ConfigResult &status)
 {
     status = ConfigResult::OK;
     switch (key)
