@@ -1,3 +1,5 @@
+#pragma once
+
 #include "Arduino.h"
 #include "circular_buffer.h"
 

@@ -1,4 +1,7 @@
+#pragma once
+
 #include "RH_RF69.h"
+#include "configs.h"
 
 #define RF69_FREQ 915.0
 
@@ -11,20 +14,44 @@ extern int16_t radio_avgRSSI;
 
 
         /**
-        * Keeps track of the different stages of Radio setup
+        * Stage 1 of radio bring-up: getting the RFM69 itself configured.
+        *
+        * This is the only part the boot state machine blocks on. It talks to
+        * local hardware only, so it either completes in a few milliseconds or
+        * fails outright - it can never stall waiting on another vehicle.
         */
         enum class radio_SetupStates : uint8_t{
             RESET1,
             RESET2,
             RADIO_INIT,
             SET_CONFIG,
-            SEND_CONN,
-            WAIT_ACK,
             COMPLETE
         };
 
+        /**
+        * Stage 2 of radio bring-up: finding the base station.
+        *
+        * This runs in the background from radio_update() and is deliberately
+        * NOT part of radio_setupComplete(). Losing or never finding the base
+        * station must not keep the vehicle from arming, so the drone reaches
+        * READY_ARMED regardless of what this reports.
+        */
+        enum class radio_LinkStates : uint8_t{
+            DISCONNECTED, // No ping outstanding; next poll will send one
+            AWAITING_ACK, // Ping sent, waiting for the base station to answer
+            CONNECTED     // Base station has acknowledged
+        };
+
         bool radio_setup();
+
+        /**
+         * True once the RFM69 is configured and able to send and receive.
+         * Does NOT imply a base station is listening - see radio_linkConnected().
+         */
         bool radio_setupComplete();
+
+        /** True once the base station has acknowledged our connection ping. */
+        bool radio_linkConnected();
 
         enum class RadioStates : uint8_t{
             HARDWARE_INIT,
@@ -45,8 +72,8 @@ extern int16_t radio_avgRSSI;
             uint16_t loopTimeAvg; // Average loop time in micros
             uint16_t loopTimeMax; // Max loop time in micros
             uint16_t RunTime; // Time that the vehicle has been powered on in seconds
-            uint8_t rssi; // The strength of the radio connection
             uint8_t currentMode; // The current mode that the vehicle is in. 
+            uint8_t empty; // Reserved
         };
 
         struct __attribute__((packed)) StatusMsg1_t {
@@ -61,7 +88,7 @@ extern int16_t radio_avgRSSI;
             uint16_t motor1set; // Motor 1 set point
             uint16_t motor2set; // Motor 2 set point
             uint16_t voltage; // Current voltage of the battery. 
-            uint16_t empty; // Reserved
+            uint16_t rssi; // The strength of the radio connection
         };
 
         struct __attribute__((packed)) StatusMsg3_t {
@@ -111,6 +138,13 @@ extern int16_t radio_avgRSSI;
 
         };
 
+        struct __attribute__((packed)) ConfigPacket{
+            uint8_t version;
+            ConfigState state;
+            ConfigKey configKey;
+            uint32_t value;
+        };
+
         // uinion all of the radio messages for type safety
         union radio_Message {
             uint64_t raw;
@@ -122,6 +156,8 @@ extern int16_t radio_avgRSSI;
             StatusMsg5_t status5;
             StatusMsg6_t status6;
             Command_t command;
+            ConfigPacket config;
+
             char textArray[8];
             
         };
@@ -157,6 +193,19 @@ extern int16_t radio_avgRSSI;
             : message(msg), type(t) {}
     };
 
+        // Fixed-point scale factors for packing Gyro floats into int16 status fields.
+        constexpr float RADIO_QUAT_SCALE = 32767.0f;  // Quaternion components are unit range [-1, 1]
+        constexpr float RADIO_ACCEL_SCALE = 1000.0f;  // m/s^2 -> mm/s^2
+        constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
+        constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
+
+        inline int16_t radio_floatToFixed(float value, float scale) {
+            float scaled = value * scale;
+            if (scaled > 32767.0f) scaled = 32767.0f;
+            if (scaled < -32768.0f) scaled = -32768.0f;
+            return static_cast<int16_t>(scaled);
+        }
+
         void radio_sendStatus0();
         void radio_sendStatus1();
         void radio_sendStatus2();
@@ -171,8 +220,9 @@ extern int16_t radio_avgRSSI;
          */
         void radio_update();
         
+    union ACK {
+        uint8_t array[8];
+        uint64_t raw;
+    };
 
-    // acknowledgement for a message.  
-    static constexpr uint8_t ACK[8] = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
-        
-
+    inline constexpr ACK ack = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
