@@ -4,7 +4,6 @@
 #include "usb.h"
 #include "gyro.h"
 #include "gimbal.h"
-#include "error.h"
 #include "motor.h"
 
 static constexpr int CONTROL_LOOP_HZ = 1000;
@@ -21,20 +20,25 @@ using namespace Drone;
 // Initialize state to BOOT
 static volatile States state = States::BOOT;
 
-// Initialize loop timers
+// Smoothing factor for the rolling loop-time average. 0.1 means the average
+// settles over roughly the last 10 ticks.
+static constexpr float LOOP_TIME_ALPHA = 0.1f;
+
+// Loop timers, all in microseconds. Written only by the control ISR.
 static uint16_t lastLoopTime = 0;
 static uint16_t worstTime = 0;
-static uint16_t bestTime = -1;
-uint16_t rollAvg = 0;
+static uint16_t bestTime = 0xFFFF;
+static uint16_t rollAvg = 0;
+static float rollingAverage = 0.0f;
 
-// Set by the hardware timer ISR every CONTROL_LOOP_US. loop() polls this
-// and clears it before running the flight control algorithm, so the
-// algorithm itself always executes in normal (non-ISR) context.
-volatile bool Drone::controlTick = false;
+// Counts ticks where update() ran longer than CONTROL_LOOP_US, i.e. the
+// control algorithm overran its own period.
+static volatile uint32_t missedTicks = 0;
 
-// Counts ticks where the previous one hadn't been serviced by loop() yet,
-// i.e. the flight control algorithm is taking longer than CONTROL_LOOP_US.
-volatile uint32_t missedTicks = 0;
+// The snapshot the control ISR records and loop() reads through
+// getTelemetry(). Never transmitted from here - the ISR must not touch the
+// radio or USB tx queues.
+static Telemetry_t telemetry{};
 
 // Hardware timer driving the control loop tick
 IntervalTimer controlTimer;
@@ -43,22 +47,47 @@ static Target_t drone_targ0;
 
 // MARK: Helpers
 
-States getState() {return state;}
+States Drone::getState() {return state;}
 
 /**
  * ISR fired by the hardware timer at CONTROL_LOOP_HZ.
  *
- * @warning Runs in interrupt context. Do not add I2C/SPI/Serial calls, heap
- * allocation, or anything else non-reentrant here - just flag the tick and
- * let loop() run the actual flight control algorithm.
+ * Calls update() directly rather than setting a flag for loop() to service.
+ * Polling a flag from loop() meant the control algorithm did not start until
+ * the current pass through radio/USB/gyro servicing finished, which put the
+ * blocking I2C read of the BNO08x - on the order of 100 us - directly into the
+ * control loop's jitter budget. Running here instead means the only variance
+ * is the timer's own interrupt latency.
+ *
+ * @warning Everything reachable from here runs in interrupt context. Keep it
+ * to arithmetic and register writes: no I2C, SPI, Serial, heap allocation, or
+ * pushes to the radio/USB tx queues, which loop() drains and which are not
+ * interrupt safe.
  */
 void onControlTick() {
-    if (controlTick) {
-        // loop() hasn't serviced the previous tick yet - the control
-        // algorithm is running long. Track it so it shows up in telemetry.
+    const uint32_t startTime = micros();
+
+    Drone::update(); // Flight control algorithm + telemetry recording
+
+    const uint32_t cost = micros() - startTime;
+
+    lastLoopTime = static_cast<uint16_t>(cost);
+    if (lastLoopTime > worstTime) worstTime = lastLoopTime;
+    if (lastLoopTime < bestTime)  bestTime  = lastLoopTime;
+
+    if (rollingAverage == 0.0f) {
+        rollingAverage = static_cast<float>(cost); // First tick after boot
+    } else {
+        rollingAverage = (LOOP_TIME_ALPHA * static_cast<float>(cost)) +
+                         ((1.0f - LOOP_TIME_ALPHA) * rollingAverage);
+    }
+    rollAvg = static_cast<uint16_t>(rollingAverage);
+
+    // update() did not finish inside its own period. The next tick is already
+    // pending, so the loop is running late from here on.
+    if (cost > static_cast<uint32_t>(CONTROL_LOOP_US)) {
         missedTicks++;
     }
-    controlTick = true;
 }
 
 /**
@@ -74,6 +103,18 @@ uint16_t Drone::getLastLoopTime() {return lastLoopTime;}
 uint16_t Drone::getWorstTime() {return worstTime;}
 uint16_t Drone::getBestTime() {return bestTime;}
 uint16_t Drone::getRollAvg() {return rollAvg;}
+uint32_t Drone::getMissedTicks() {return missedTicks;}
+
+void Drone::getTelemetry(Telemetry_t& out) {
+    // The ISR writes `telemetry` field by field. Without this guard a read
+    // from loop() can straddle a tick and return a mix of two instants - a
+    // quaternion whose components come from different orientations, say.
+    // Copying a few dozen bytes costs well under a microsecond of the control
+    // loop's 1000 us period.
+    noInterrupts();
+    out = telemetry;
+    interrupts();
+}
 
 // --- LED Logic ---
 
@@ -258,9 +299,62 @@ bool Drone::startup() {
 
 
 /**
- * Main update loop
- * 
- * Runs at main loop speed and is not controlled by ISR
+ * Captures one coherent frame of vehicle state for loop() to transmit later.
+ *
+ * Recording and sending are deliberately split: this runs every control tick
+ * so every value is sampled at the same precise instant, while the actual
+ * radio and USB writes happen in loop() at ~10 Hz, where blocking on SPI and
+ * the tx queues is safe.
+ *
+ * The timing fields carry the previous tick's measurement, since the ISR
+ * measures update() by wrapping the call to it. At 1 kHz that is 1 ms stale.
+ *
+ * @warning Runs in interrupt context. Reads only; no queue pushes.
+ */
+static void recordTelemetry() {
+    telemetry.loopTimeLast = lastLoopTime;
+    telemetry.loopTimeAvg  = rollAvg;
+    telemetry.loopTimeMax  = worstTime;
+    telemetry.loopTimeMin  = bestTime;
+    telemetry.missedTicks  = missedTicks;
+    telemetry.runtimeSec   = millis() / 1000;
+    telemetry.state        = state;
+
+    telemetry.gimbalPitch    = Gimbal::getPitch();
+    telemetry.gimbalYaw      = Gimbal::getYaw();
+    telemetry.topServoSet    = Gimbal::getTopSevo();
+    telemetry.bottomServoSet = Gimbal::getBottomServo();
+
+    telemetry.topMotorSet    = Motor::getTopSpeed();
+    telemetry.bottomMotorSet = Motor::getBottomSpeed();
+
+    // NOTE: Gyro state is written by Gyro::update() in loop() context, so
+    // these reads can straddle one of those writes and mix components from
+    // two different sensor reports. Publishing the gyro's output through a
+    // double buffer would close that hole; see the control-loop notes in
+    // docs/code-conventions.md.
+    telemetry.qR = Gyro::droneQuatReal;
+    telemetry.qI = Gyro::droneQuatI;
+    telemetry.qJ = Gyro::droneQuatJ;
+    telemetry.qK = Gyro::droneQuatK;
+
+    telemetry.accelX = Gyro::worldAccelX;
+    telemetry.accelY = Gyro::worldAccelY;
+    telemetry.accelZ = Gyro::worldAccelZ;
+
+    telemetry.velX = Gyro::droneState.velocity.x;
+    telemetry.velY = Gyro::droneState.velocity.y;
+    telemetry.velZ = Gyro::droneState.velocity.z;
+
+    telemetry.posX = Gyro::droneState.position.x;
+    telemetry.posY = Gyro::droneState.position.y;
+    telemetry.posZ = Gyro::droneState.position.z;
+}
+
+/**
+ * Flight control algorithm, run once per control tick.
+ *
+ * @warning Called from onControlTick(), i.e. in INTERRUPT CONTEXT.
  */
 void Drone::update() {
     static Target_t activeSlot;
@@ -275,23 +369,5 @@ void Drone::update() {
     // Set motor set points
     Motor::setMotor(activeSlot.bottomMotor, activeSlot.topMotor);
 
-
-    static uint32_t lastTelemetryMs = 0;
-    constexpr uint32_t telemetryIntervalMs = 100;
-    const uint32_t now = millis();
-    if (now - lastTelemetryMs >= telemetryIntervalMs) {
-        USB::sendTelemetry();
-        Radio::sendStatus0();
-        Radio::sendStatus1();
-        Radio::sendStatus2();
-        Radio::sendStatus3();
-        Radio::sendStatus4();
-        Radio::sendStatus5();
-        Radio::sendStatus6();
-        lastTelemetryMs = now;
-    }
+    recordTelemetry();
 }
-
-
-
-

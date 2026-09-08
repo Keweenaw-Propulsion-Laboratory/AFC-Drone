@@ -232,7 +232,7 @@ static bool usb_is_valid_rx_header(const usb_header_t& header) {
  * Reads any new USB packets into the rx buffer
  * Sends out any packets in the tx buffer
  */
-void usb_update() {
+void USB::update() {
 
     if (!Serial) {
         return;
@@ -410,34 +410,36 @@ void USB::sendText(const char* message, int length) {
     }
 }
 
-void USB::sendTelemetry() {
+void USB::sendTelemetry(const Drone::Telemetry_t& t) {
     Message tx_message;
 
-    tx_message.telemetry.loopTimeAvg = Drone::getRollAvg();
-    tx_message.telemetry.loopTimeMax = Drone::getWorstTime();
-    tx_message.telemetry.runTime = millis() / 1000; // Run time in seconds
+    tx_message.telemetry.loopTimeAvg = t.loopTimeAvg;
+    tx_message.telemetry.loopTimeMax = t.loopTimeMax;
+    tx_message.telemetry.runTime = t.runtimeSec; // Run time in seconds
+    // RSSI and voltage are owned by loop() context, not the control tick, so
+    // they are read live rather than coming from the snapshot.
     tx_message.telemetry.rssi = Radio::radio_avgRSSI;
-    tx_message.telemetry.currentMode = (uint8_t) Drone::getState();
-    tx_message.telemetry.gimbalPitch = Gimbal::getPitch();
-    tx_message.telemetry.gimbalYaw = Gimbal::getYaw();
-    tx_message.telemetry.topServoSet = Gimbal::getTopSevo();
-    tx_message.telemetry.bottomServoSet = Gimbal::getBottomServo();
-    tx_message.telemetry.bottomMotorSet = Motor::getBottomSpeed();
-    tx_message.telemetry.topMotorSet = Motor::getTopSpeed();
+    tx_message.telemetry.currentMode = (uint8_t) t.state;
+    tx_message.telemetry.gimbalPitch = t.gimbalPitch;
+    tx_message.telemetry.gimbalYaw = t.gimbalYaw;
+    tx_message.telemetry.topServoSet = t.topServoSet;
+    tx_message.telemetry.bottomServoSet = t.bottomServoSet;
+    tx_message.telemetry.bottomMotorSet = t.bottomMotorSet;
+    tx_message.telemetry.topMotorSet = t.topMotorSet;
     tx_message.telemetry.voltage = 0;
-    tx_message.telemetry.qR = Radio::floatToFixed(Gyro::droneQuatReal, Radio::RADIO_QUAT_SCALE);
-    tx_message.telemetry.qI = Radio::floatToFixed(Gyro::droneQuatI, Radio::RADIO_QUAT_SCALE);
-    tx_message.telemetry.qJ = Radio::floatToFixed(Gyro::droneQuatJ, Radio::RADIO_QUAT_SCALE);
-    tx_message.telemetry.qK = Radio::floatToFixed(Gyro::droneQuatK, Radio::RADIO_QUAT_SCALE);
-    tx_message.telemetry.accelX = Radio::floatToFixed(Gyro::worldAccelX, Radio::RADIO_ACCEL_SCALE);
-    tx_message.telemetry.accelY = Radio::floatToFixed(Gyro::worldAccelY, Radio::RADIO_ACCEL_SCALE);
-    tx_message.telemetry.accelZ = Radio::floatToFixed(Gyro::worldAccelZ, Radio::RADIO_ACCEL_SCALE);
-    tx_message.telemetry.velX = Radio::floatToFixed(Gyro::droneState.velocity.x, Radio::RADIO_VEL_SCALE);
-    tx_message.telemetry.velY = Radio::floatToFixed(Gyro::droneState.velocity.y, Radio::RADIO_VEL_SCALE);
-    tx_message.telemetry.velZ = Radio::floatToFixed(Gyro::droneState.velocity.z, Radio::RADIO_VEL_SCALE);
-    tx_message.telemetry.posX = Radio::floatToFixed(Gyro::droneState.position.x, Radio::RADIO_POS_SCALE);
-    tx_message.telemetry.posY = Radio::floatToFixed(Gyro::droneState.position.y, Radio::RADIO_POS_SCALE);
-    tx_message.telemetry.posZ = Radio::floatToFixed(Gyro::droneState.position.z, Radio::RADIO_POS_SCALE);
+    tx_message.telemetry.qR = Radio::floatToFixed(t.qR, Radio::RADIO_QUAT_SCALE);
+    tx_message.telemetry.qI = Radio::floatToFixed(t.qI, Radio::RADIO_QUAT_SCALE);
+    tx_message.telemetry.qJ = Radio::floatToFixed(t.qJ, Radio::RADIO_QUAT_SCALE);
+    tx_message.telemetry.qK = Radio::floatToFixed(t.qK, Radio::RADIO_QUAT_SCALE);
+    tx_message.telemetry.accelX = Radio::floatToFixed(t.accelX, Radio::RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelY = Radio::floatToFixed(t.accelY, Radio::RADIO_ACCEL_SCALE);
+    tx_message.telemetry.accelZ = Radio::floatToFixed(t.accelZ, Radio::RADIO_ACCEL_SCALE);
+    tx_message.telemetry.velX = Radio::floatToFixed(t.velX, Radio::RADIO_VEL_SCALE);
+    tx_message.telemetry.velY = Radio::floatToFixed(t.velY, Radio::RADIO_VEL_SCALE);
+    tx_message.telemetry.velZ = Radio::floatToFixed(t.velZ, Radio::RADIO_VEL_SCALE);
+    tx_message.telemetry.posX = Radio::floatToFixed(t.posX, Radio::RADIO_POS_SCALE);
+    tx_message.telemetry.posY = Radio::floatToFixed(t.posY, Radio::RADIO_POS_SCALE);
+    tx_message.telemetry.posZ = Radio::floatToFixed(t.posZ, Radio::RADIO_POS_SCALE);
     tx_message.telemetry.latitude = 47.119643352372485f;
     tx_message.telemetry.longitude = -88.549229750287f;
 

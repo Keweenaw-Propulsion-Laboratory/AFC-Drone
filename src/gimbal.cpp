@@ -12,8 +12,8 @@ using namespace Gimbal;
 static Servo pitchServo;
 static Servo yawServo;
 
-static float gimbal_botServo = 0.0f;
-static float gimbal_topServo = 0.0f;
+static float bottomServo = 0.0f;
+static float topServo = 0.0f;
 
 static float currentPitch = 0.0f;
 static float currentYaw = 0.0f;
@@ -68,9 +68,9 @@ void Gimbal::setup() {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setTopServo(float angle) {
-    gimbal_topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
+    topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
 
-    pitchServo.write(gimbal_topServo);   
+    pitchServo.write(topServo);   
 }
 
 /**
@@ -79,8 +79,8 @@ void setTopServo(float angle) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setBotServo(float angle) {
-    gimbal_botServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
-    yawServo.write(gimbal_botServo);
+    bottomServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
+    yawServo.write(bottomServo);
 }
 
 void Gimbal::set(float pitch, float yaw) {
@@ -184,3 +184,5 @@ void Gimbal::selfTest(bool lookup) {
 
 float Gimbal::getPitch() {return currentPitch;}
 float Gimbal::getYaw() {return currentYaw;}
+uint16_t Gimbal::getTopSevo() {return topServo;}
+uint16_t Gimbal::getBottomServo() {return bottomServo;}

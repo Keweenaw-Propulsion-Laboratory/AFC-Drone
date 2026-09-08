@@ -2,6 +2,7 @@
 
 #include "RH_RF69.h"
 #include "configs.h"
+#include "drone.h"
 
 namespace Radio {
 
@@ -203,13 +204,21 @@ extern int16_t radio_avgRSSI;
         return static_cast<int16_t>(scaled);
     }
 
-    void sendStatus0();
-    void sendStatus1();
-    void sendStatus2();
-    void sendStatus3();
-    void sendStatus4();
-    void sendStatus5();
-    void sendStatus6();
+    /**
+     * Status packet senders. Each takes the telemetry snapshot recorded by the
+     * control ISR rather than reading the live subsystems, so every packet in
+     * one telemetry frame describes the same instant.
+     *
+     * Values the control tick cannot see - radio RSSI, battery voltage, GPS -
+     * are still read live here, because they are owned by loop() context.
+     */
+    void sendStatus0(const Drone::Telemetry_t& t);
+    void sendStatus1(const Drone::Telemetry_t& t);
+    void sendStatus2(const Drone::Telemetry_t& t);
+    void sendStatus3(const Drone::Telemetry_t& t);
+    void sendStatus4(const Drone::Telemetry_t& t);
+    void sendStatus5(const Drone::Telemetry_t& t);
+    void sendStatus6(const Drone::Telemetry_t& t);
     
 
     /**

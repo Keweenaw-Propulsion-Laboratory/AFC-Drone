@@ -1,5 +1,6 @@
 #pragma once
 #include "Arduino.h"
+#include "drone.h"
 
 #include <cstring>
 
@@ -51,7 +52,11 @@ inline void sendText(const char* message) {
     sendText(message, static_cast<int>(strlen(message)));
 }
 
-void sendTelemetry();
+/**
+ * Sends the telemetry frame recorded by the control ISR.
+ * @param t Snapshot from Drone::getTelemetry().
+ */
+void sendTelemetry(const Drone::Telemetry_t& t);
 void radioRelay(const Radio::Message& message, Radio::MessageType type,
                      uint8_t packetNum, RadioDirection direction);
 }

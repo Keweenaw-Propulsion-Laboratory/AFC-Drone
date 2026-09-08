@@ -4,7 +4,6 @@
 #include "circular_buffer.h"
 #include <cstdint>
 
-#include "error.h"
 #include "drone.h"
 #include "gimbal.h"
 #include "gyro.h"
@@ -70,7 +69,7 @@ void radio_sendMessage(Message data, MessageType type);
  * Will return false if an error occured. All errors should
  * be treated as fatal
  */
-bool radio_setup() {
+bool Radio::setup() {
 
     // A variable to help with timing during the setup process
     static uint32_t setupTimmer;
@@ -316,81 +315,83 @@ void radio_sendMessage(Message data, MessageType type) {
 
 // MARK: Status Senders
 
-void Radio::sendStatus0() {
+void Radio::sendStatus0(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status0.loopTimeAvg = Drone::getRollAvg();
-    msg.status0.loopTimeMax = Drone::getWorstTime();
-    msg.status0.RunTime = millis() / 1000;
-    msg.status0.currentMode = (uint8_t) Drone::getState();
+    msg.status0.loopTimeAvg = t.loopTimeAvg;
+    msg.status0.loopTimeMax = t.loopTimeMax;
+    msg.status0.RunTime = t.runtimeSec;
+    msg.status0.currentMode = (uint8_t) t.state;
 
     radio_sendMessage( msg, MessageType::STATUS0);
 }
 
-void Radio::sendStatus1() {
+void Radio::sendStatus1(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status1.gimbalPitchNorm = Gimbal::getPitch();
-    msg.status1.gimbalYawNorm = Gimbal::getYaw();
-    msg.status1.topServoSet = Gimbal::getTopSevo();
-    msg.status1.bottomServoSet = Gimbal::getBottomServo();
+    msg.status1.gimbalPitchNorm = t.gimbalPitch;
+    msg.status1.gimbalYawNorm = t.gimbalYaw;
+    msg.status1.topServoSet = t.topServoSet;
+    msg.status1.bottomServoSet = t.bottomServoSet;
 
     radio_sendMessage(msg, MessageType::STATUS1);
 }
 
-void Radio::sendStatus2() {
+void Radio::sendStatus2(const Drone::Telemetry_t& t) {
     Message msg{};
     
-    msg.status2.bottomMotorSet = Motor::getBottomSpeed();
-    msg.status2.topMotorSet = Motor::getTopSpeed();
+    msg.status2.bottomMotorSet = t.bottomMotorSet;
+    msg.status2.topMotorSet = t.topMotorSet;
     msg.status2.voltage = 0; // TODO connect to battery monitor @crheilma-code
+    // RSSI is owned by loop() context, not the control tick, so it is read
+    // live rather than coming from the snapshot.
     msg.status2.rssi = radio_avgRSSI;
 
     radio_sendMessage(msg, MessageType::STATUS2);
 
 }
 
-void Radio::sendStatus3() {
+void Radio::sendStatus3(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status3.qR = floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
-    msg.status3.qI = floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
-    msg.status3.qJ = floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
-    msg.status3.qK = floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
+    msg.status3.qR = floatToFixed(t.qR, RADIO_QUAT_SCALE);
+    msg.status3.qI = floatToFixed(t.qI, RADIO_QUAT_SCALE);
+    msg.status3.qJ = floatToFixed(t.qJ, RADIO_QUAT_SCALE);
+    msg.status3.qK = floatToFixed(t.qK, RADIO_QUAT_SCALE);
 
     radio_sendMessage(msg, MessageType::STATUS3);
 }
 
-void Radio::sendStatus4() {
+void Radio::sendStatus4(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status4.accelX = floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
-    msg.status4.accelY = floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
-    msg.status4.accelZ = floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
+    msg.status4.accelX = floatToFixed(t.accelX, RADIO_ACCEL_SCALE);
+    msg.status4.accelY = floatToFixed(t.accelY, RADIO_ACCEL_SCALE);
+    msg.status4.accelZ = floatToFixed(t.accelZ, RADIO_ACCEL_SCALE);
     msg.status4.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS4);
 
 }
 
-void Radio::sendStatus5() {
+void Radio::sendStatus5(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status5.velX = floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
-    msg.status5.velY = floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
-    msg.status5.velZ = floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
+    msg.status5.velX = floatToFixed(t.velX, RADIO_VEL_SCALE);
+    msg.status5.velY = floatToFixed(t.velY, RADIO_VEL_SCALE);
+    msg.status5.velZ = floatToFixed(t.velZ, RADIO_VEL_SCALE);
     msg.status5.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS5);
 
 }
 
-void Radio::sendStatus6() {
+void Radio::sendStatus6(const Drone::Telemetry_t& t) {
     Message msg{};
 
-    msg.status6.posX = floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
-    msg.status6.posY = floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
-    msg.status6.posZ = floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
+    msg.status6.posX = floatToFixed(t.posX, RADIO_POS_SCALE);
+    msg.status6.posY = floatToFixed(t.posY, RADIO_POS_SCALE);
+    msg.status6.posZ = floatToFixed(t.posZ, RADIO_POS_SCALE);
     msg.status6.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS6);
