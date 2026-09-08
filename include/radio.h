@@ -39,7 +39,7 @@ extern int16_t radio_avgRSSI;
             CONNECTED     // Base station has acknowledged
         };
 
-        bool radio_setup();
+        bool setup();
 
         /**
          * True once the RFM69 is configured and able to send and receive.
@@ -196,20 +196,20 @@ extern int16_t radio_avgRSSI;
     constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
     constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
 
-    inline int16_t radio_floatToFixed(float value, float scale) {
+    inline int16_t floatToFixed(float value, float scale) {
         float scaled = value * scale;
         if (scaled > 32767.0f) scaled = 32767.0f;
         if (scaled < -32768.0f) scaled = -32768.0f;
         return static_cast<int16_t>(scaled);
     }
 
-    void radio_sendStatus0();
-    void radio_sendStatus1();
-    void radio_sendStatus2();
-    void radio_sendStatus3();
-    void radio_sendStatus4();
-    void radio_sendStatus5();
-    void radio_sendStatus6();
+    void sendStatus0();
+    void sendStatus1();
+    void sendStatus2();
+    void sendStatus3();
+    void sendStatus4();
+    void sendStatus5();
+    void sendStatus6();
     
 
     /**

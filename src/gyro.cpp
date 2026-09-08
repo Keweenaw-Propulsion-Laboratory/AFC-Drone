@@ -31,7 +31,7 @@ bool Gyro::setup() {
     case Gyro::GyroSetupStates::I2C :
         if (! gyro.begin_I2C()) {
             // TODO add error
-            usb_send_text("Gyro I2C failed");
+            USB::sendText("Gyro I2C failed");
             return false;
         }
         // begin_I2C() leaves the bus at Teensy's default 100 kHz; the BNO08x
@@ -42,7 +42,7 @@ bool Gyro::setup() {
         break;
     
     case Gyro::GyroSetupStates::EnableReport :
-        usb_send_text("BN0085 connected");
+        USB::sendText("BN0085 connected");
         /*
         This section of the setup determines what kind of data we want to 
         get from the Gyro. The different report types can be found at the link below
@@ -50,14 +50,14 @@ bool Gyro::setup() {
 
         */
         if (! gyro.enableReport(SH2_GAME_ROTATION_VECTOR, 5000)) { // 200 hz
-            usb_send_text("Could not enable stabilized rotation vector");
+            USB::sendText("Could not enable stabilized rotation vector");
             return false;
         }
         if (! gyro.enableReport(SH2_LINEAR_ACCELERATION, 5000)) {
-            usb_send_text("Could not enable Linear Acceleration report");
+            USB::sendText("Could not enable Linear Acceleration report");
             return false;
         }
-        usb_send_text("Gyro Complete");
+        USB::sendText("Gyro Complete");
         state = Complete;
         break;  
     default:
@@ -278,11 +278,11 @@ void Gyro::debug() {
         {
         case 0:
             sprintf(debugOut, "Pitch %.3f, Yaw %.3f, Roll %.3f", getPitch(), getYaw(), getRoll());
-            usb_send_text(debugOut, strlen(debugOut));
+            USB::sendText(debugOut, strlen(debugOut));
             break;
         case 1:
             sprintf(debugOut, "PosX %.3f, PosY %.3f, PosZ %.3f", droneState.position.x, droneState.position.y, droneState.position.z);
-            usb_send_text(debugOut, strlen(debugOut));
+            USB::sendText(debugOut, strlen(debugOut));
             break;
         default:
             break;

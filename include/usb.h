@@ -3,12 +3,18 @@
 
 #include <cstring>
 
-// These are defined in radio.h.  Forward declarations keep usb.h independent
-// of the radio driver while allowing the relay API to use the shared types.
-union radio_Message;
-enum class radio_MessageType : uint8_t;
+// These types are defined in radio.h. Forward-declaring them keeps usb.h
+// independent of the radio driver while letting the relay API use the shared
+// types. They must be declared inside namespace Radio - the namespace the
+// types actually live in - and at file scope, NOT inside namespace USB.
+namespace Radio {
+    union Message;
+    enum class MessageType : uint8_t;
+}
 
-enum class usb_message_types : uint8_t {
+namespace USB {
+
+enum class MessageTypes : uint8_t {
     RAW = 0, // Explicit value
     DEBUG_TEXT = 1,
     RADIO_PACKET = 2, 
@@ -21,17 +27,17 @@ enum class usb_message_types : uint8_t {
 // payload, CRC-16/CCITT-FALSE (little-endian). CRC excludes the sync bytes.
 static constexpr uint8_t USB_PROTOCOL_VERSION = 1;
 
-enum class usb_radio_direction : uint8_t {
+enum class RadioDirection : uint8_t {
     RECEIVED = 0,
     SENT = 1,
 };
 
-void usb_update();
+void update();
 
 /**
  * Send USB debug messages
  */
-void usb_send_text(const char* message, int length);
+void sendText(const char* message, int length);
 
 /**
  * Send a NUL-terminated debug string.
@@ -40,11 +46,12 @@ void usb_send_text(const char* message, int length);
  * hand-counted length that is too short silently truncates the message, and one
  * that is too long reads past the literal.
  */
-inline void usb_send_text(const char* message) {
+inline void sendText(const char* message) {
     if (message == nullptr) return;
-    usb_send_text(message, static_cast<int>(strlen(message)));
+    sendText(message, static_cast<int>(strlen(message)));
 }
 
-void usb_send_telemetry();
-void usb_radio_relay(const radio_Message& message, radio_MessageType type,
-                     uint8_t packetNum, usb_radio_direction direction);
+void sendTelemetry();
+void radioRelay(const Radio::Message& message, Radio::MessageType type,
+                     uint8_t packetNum, RadioDirection direction);
+}

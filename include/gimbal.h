@@ -47,4 +47,7 @@ namespace Gimbal {
     /**The current yaw of the gimbal mechanism */
     float getYaw();
 
+    int16_t getTopSevo();
+    int16_t getBottomServo();
+
 };

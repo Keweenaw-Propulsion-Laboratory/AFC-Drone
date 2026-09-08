@@ -23,8 +23,8 @@ void setup() {
 void loop() {
     // Serviced every pass, independent of the control loop tick, so radio/USB
     // I/O and sensor fusion stay responsive between control ticks.
-    radio_update();
-    usb_update();
+    Radio::update();
+    USB::update();
     Gyro::update();
 
     // Drone::controlTick is set by a hardware timer ISR (see Drone::onControlTick

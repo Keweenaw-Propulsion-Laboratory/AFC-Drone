@@ -36,6 +36,7 @@ namespace Drone {
     uint16_t getLastLoopTime();
     uint16_t getWorstTime();
     uint16_t getBestTime();
+    uint16_t getRollAvg();
 
     void setTarget(Target_t target);
 

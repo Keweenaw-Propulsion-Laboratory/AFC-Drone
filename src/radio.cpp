@@ -94,7 +94,7 @@ bool radio_setup() {
 
             if (millis() - setupTimmer >= 20){
                 setupState = SetupStates::RADIO_INIT;
-                usb_send_text("Radio Reset");
+                USB::sendText("Radio Reset");
             }
             return true;
 
@@ -103,7 +103,7 @@ bool radio_setup() {
         case SetupStates::RADIO_INIT :
             if( !radio.init() ) {
                 // ErrorHandler::addError(ErrorHandler::radioInitFail);
-                usb_send_text("Radio start failed");
+                USB::sendText("Radio start failed");
                 return false;
             }
 
@@ -114,7 +114,7 @@ bool radio_setup() {
         case SetupStates::SET_CONFIG : {
                 if (!radio.setFrequency(RF69_FREQ)){
                     // ErrorHandler::addError(ErrorHandler::radioFreqSetFail);
-                    usb_send_text("failed to set radio freq");
+                    USB::sendText("failed to set radio freq");
                     return false;
                 }
 
@@ -236,8 +236,8 @@ void Radio::update() {
                 memcpy(&msg, buffer, sizeof(msg));
 
                 if (Configs::get().usbRelayEnabled) {
-                    usb_radio_relay(msg, static_cast<MessageType>(header.packetType),
-                                    header.msgNum, usb_radio_direction::RECEIVED);
+                    USB::radioRelay(msg, static_cast<MessageType>(header.packetType),
+                                    header.msgNum, USB::RadioDirection::RECEIVED);
                 }
 
                 switch (static_cast<MessageType>(header.packetType))
@@ -249,7 +249,7 @@ void Radio::update() {
                     if (msg.raw == ack.raw &&
                         linkState != LinkStates::CONNECTED) {
                         linkState = LinkStates::CONNECTED;
-                        usb_send_text("BaseStation CONNECTED");
+                        USB::sendText("BaseStation CONNECTED");
                     }
                     break;
                 
@@ -295,8 +295,8 @@ void Radio::update() {
 
             radio.send(frame, sizeof(frame)); // Non-blocking transmit start
             if (Configs::get().usbRelayEnabled) {
-                usb_radio_relay(packet.message, packet.type, header.msgNum,
-                                usb_radio_direction::SENT);
+                USB::radioRelay(packet.message, packet.type, header.msgNum,
+                                USB::RadioDirection::SENT);
             }
             lastTxTime = now;
         }
@@ -316,29 +316,29 @@ void radio_sendMessage(Message data, MessageType type) {
 
 // MARK: Status Senders
 
-void radio_sendStatus0() {
+void Radio::sendStatus0() {
     Message msg{};
 
-    msg.status0.loopTimeAvg = drone_rollAvg;
-    msg.status0.loopTimeMax = Drone::worstTime;
+    msg.status0.loopTimeAvg = Drone::getRollAvg();
+    msg.status0.loopTimeMax = Drone::getWorstTime();
     msg.status0.RunTime = millis() / 1000;
-    msg.status0.currentMode = (uint8_t) Drone::state;
+    msg.status0.currentMode = (uint8_t) Drone::getState();
 
     radio_sendMessage( msg, MessageType::STATUS0);
 }
 
-void radio_sendStatus1() {
+void Radio::sendStatus1() {
     Message msg{};
 
-    msg.status1.gimbalPitchNorm = gimbal_pitch;
-    msg.status1.gimbalYawNorm = gimbal_yaw;
-    msg.status1.topServoSet = gimbal_topServo;
-    msg.status1.bottomServoSet = gimbal_botServo;
+    msg.status1.gimbalPitchNorm = Gimbal::getPitch();
+    msg.status1.gimbalYawNorm = Gimbal::getYaw();
+    msg.status1.topServoSet = Gimbal::getTopSevo();
+    msg.status1.bottomServoSet = Gimbal::getBottomServo();
 
     radio_sendMessage(msg, MessageType::STATUS1);
 }
 
-void radio_sendStatus2() {
+void Radio::sendStatus2() {
     Message msg{};
     
     msg.status2.bottomMotorSet = Motor::getBottomSpeed();
@@ -350,47 +350,47 @@ void radio_sendStatus2() {
 
 }
 
-void radio_sendStatus3() {
+void Radio::sendStatus3() {
     Message msg{};
 
-    msg.status3.qR = radio_floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
-    msg.status3.qI = radio_floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
-    msg.status3.qJ = radio_floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
-    msg.status3.qK = radio_floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
+    msg.status3.qR = floatToFixed(Gyro::droneQuatReal, RADIO_QUAT_SCALE);
+    msg.status3.qI = floatToFixed(Gyro::droneQuatI, RADIO_QUAT_SCALE);
+    msg.status3.qJ = floatToFixed(Gyro::droneQuatJ, RADIO_QUAT_SCALE);
+    msg.status3.qK = floatToFixed(Gyro::droneQuatK, RADIO_QUAT_SCALE);
 
     radio_sendMessage(msg, MessageType::STATUS3);
 }
 
-void radio_sendStatus4() {
+void Radio::sendStatus4() {
     Message msg{};
 
-    msg.status4.accelX = radio_floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
-    msg.status4.accelY = radio_floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
-    msg.status4.accelZ = radio_floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
+    msg.status4.accelX = floatToFixed(Gyro::worldAccelX, RADIO_ACCEL_SCALE);
+    msg.status4.accelY = floatToFixed(Gyro::worldAccelY, RADIO_ACCEL_SCALE);
+    msg.status4.accelZ = floatToFixed(Gyro::worldAccelZ, RADIO_ACCEL_SCALE);
     msg.status4.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS4);
 
 }
 
-void radio_sendStatus5() {
+void Radio::sendStatus5() {
     Message msg{};
 
-    msg.status5.velX = radio_floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
-    msg.status5.velY = radio_floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
-    msg.status5.velZ = radio_floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
+    msg.status5.velX = floatToFixed(Gyro::droneState.velocity.x, RADIO_VEL_SCALE);
+    msg.status5.velY = floatToFixed(Gyro::droneState.velocity.y, RADIO_VEL_SCALE);
+    msg.status5.velZ = floatToFixed(Gyro::droneState.velocity.z, RADIO_VEL_SCALE);
     msg.status5.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS5);
 
 }
 
-void radio_sendStatus6() {
+void Radio::sendStatus6() {
     Message msg{};
 
-    msg.status6.posX = radio_floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
-    msg.status6.posY = radio_floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
-    msg.status6.posZ = radio_floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
+    msg.status6.posX = floatToFixed(Gyro::droneState.position.x, RADIO_POS_SCALE);
+    msg.status6.posY = floatToFixed(Gyro::droneState.position.y, RADIO_POS_SCALE);
+    msg.status6.posZ = floatToFixed(Gyro::droneState.position.z, RADIO_POS_SCALE);
     msg.status6.empty = 0;
 
     radio_sendMessage(msg, MessageType::STATUS6);

@@ -70,9 +70,10 @@ void startControlTimer() {
     controlTimer.priority(CONTROL_TIMER_PRIORITY);
 }
 
-uint16_t getLastLoopTime() {return lastLoopTime;}
-uint16_t getWorstTime() {return worstTime;}
-uint16_t getBestTime() {return bestTime;}
+uint16_t Drone::getLastLoopTime() {return lastLoopTime;}
+uint16_t Drone::getWorstTime() {return worstTime;}
+uint16_t Drone::getBestTime() {return bestTime;}
+uint16_t Drone::getRollAvg() {return rollAvg;}
 
 // --- LED Logic ---
 
@@ -172,7 +173,7 @@ void Drone::setTarget(Target_t target) {
  */
 bool Drone::startup() {
     // Step 1 Radio
-    usb_update(); // Update the USB stack to allow for prints
+    USB::update(); // Update the USB stack to allow for prints
     updateLEDS(); // Update status LEDS
 
     switch (state)
@@ -183,18 +184,18 @@ bool Drone::startup() {
         
         // Transition to next state
         state = States::RADIO_SETUP;
-        usb_send_text("DRONE: State progressing from BOOT to RADIO_SETUP");
+        USB::sendText("DRONE: State progressing from BOOT to RADIO_SETUP");
         break;
     
     case States::RADIO_SETUP :
-        if(!radio_setup()) {
+        if(!Radio::setup()) {
             state = States::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage RADIO_SETUP");
+            USB::sendText("DRONE: SETUP FAILURE in stage RADIO_SETUP");
         }
 
         if (Radio::setupComplete()) {
             state = States::SENSOR_SETUP;
-            usb_send_text("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
+            USB::sendText("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
         }
         break;
 
@@ -204,17 +205,17 @@ bool Drone::startup() {
         // Run setup functions here
         if (!Gyro::setup()) {
             state = States::FAULT_ERROR;
-            usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
+            USB::sendText("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
         }
 
         // if (!GPS::setup()) {
         //     state = States::FAULT_ERROR;
-        //     usb_send_text("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS")
+        //     USB::sendText("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GPS")
         // }
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
-            usb_send_text("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
+            USB::sendText("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
             state = States::CONTROL_SETUP;
         }
 
@@ -222,7 +223,7 @@ bool Drone::startup() {
 
     case States::CONTROL_SETUP :
         Gimbal::setup();
-        motor_setup();
+        Motor::setup();
         startControlTimer();
         state = States::READY_ARMED;
         break;
@@ -235,7 +236,7 @@ bool Drone::startup() {
         static bool faultReported = false;
         const uint32_t nowMs = millis();
         if (!faultReported || nowMs - lastFaultMs >= 1000) {
-            usb_send_text("FAULT");
+            USB::sendText("FAULT");
             lastFaultMs = nowMs;
             faultReported = true;
         }
@@ -247,7 +248,7 @@ bool Drone::startup() {
     }
 
     if (state == States::READY_ARMED){
-        usb_send_text("Drone ARMED");
+        USB::sendText("Drone ARMED");
         return true;
     }
 
@@ -272,21 +273,21 @@ void Drone::update() {
                 activeSlot.gimbalY / GIMBAL_INT16_TO_FLOAT);
 
     // Set motor set points
-    motor_setMotor(activeSlot.bottomMotor, activeSlot.topMotor);
+    Motor::setMotor(activeSlot.bottomMotor, activeSlot.topMotor);
 
 
     static uint32_t lastTelemetryMs = 0;
     constexpr uint32_t telemetryIntervalMs = 100;
     const uint32_t now = millis();
     if (now - lastTelemetryMs >= telemetryIntervalMs) {
-        usb_send_telemetry();
-        radio_sendStatus0();
-        radio_sendStatus1();
-        radio_sendStatus2();
-        radio_sendStatus3();
-        radio_sendStatus4();
-        radio_sendStatus5();
-        radio_sendStatus6();
+        USB::sendTelemetry();
+        Radio::sendStatus0();
+        Radio::sendStatus1();
+        Radio::sendStatus2();
+        Radio::sendStatus3();
+        Radio::sendStatus4();
+        Radio::sendStatus5();
+        Radio::sendStatus6();
         lastTelemetryMs = now;
     }
 }
