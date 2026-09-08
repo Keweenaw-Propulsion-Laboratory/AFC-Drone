@@ -5,7 +5,7 @@ namespace Configs {
 
     extern const uint8_t CONFIG_VERSION;
     /**
-     * Config structure in non-volitile memory. 
+     * Config structure in non-volatile memory. 
      * 
      * All configs should be loaded upon boot and any changes be saved before or 
      * after fllight. Writing to EEPROM initiates a blocked call which will stall
@@ -35,7 +35,12 @@ namespace Configs {
         int8_t motor2offset;
     };
 
-    /** Identifies a single config setting for config_set(). */
+    // Stored EEPROM layout. Any change to the struct above must bump
+    // CONFIG_VERSION and add a matching case to migrate(), or an existing
+    // vehicle's saved trim is silently reinterpreted under the new layout.
+    static_assert(sizeof(PersistentConfig) == 19, "PersistentConfig layout changed");
+
+    /** Identifies a single config setting for set(). */
     enum class ConfigKey : uint16_t {
         DebugMode,
         TxPowerDbm,
@@ -48,7 +53,7 @@ namespace Configs {
         Motor2Offset,
     };
 
-    /**Valid config opperations */
+    /**Valid config operations */
     enum class ConfigOp : uint8_t {
         READ = 1,
         SET = 2,
@@ -70,7 +75,7 @@ namespace Configs {
     };
 
     /**
-     * Union of the Config opperation and the result. 
+     * Union of the Config operation and the result. 
      * 
      * Combines the enum values
      */
@@ -85,7 +90,7 @@ namespace Configs {
     };
 
     /**
-     * Load saved configs from the non-volitile flash. 
+     * Load saved configs from the non-volatile flash. 
      */
     void load();
 
@@ -124,7 +129,7 @@ namespace Configs {
 
     /**
      * Return one setting using the same int32_t representation accepted by
-     * config_set(). Boolean settings are returned as 0 or 1.
+     * set(). Boolean settings are returned as 0 or 1.
      * 
      * @param status returns 0 on success. -1 on failure
      */

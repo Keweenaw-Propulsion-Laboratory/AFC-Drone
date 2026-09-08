@@ -9,7 +9,7 @@ uint16_t getTopSpeed();
 
 
 /** 
- * Sets up required reasources
+ * Sets up required resources
  */
 void setup();
 

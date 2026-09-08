@@ -11,7 +11,7 @@
 #include "motor.h"
 #include "configs.h"
 
-using namespace Radio;
+namespace Radio {
 
 /**Minimum time to wait in ms between transmissions */
 static constexpr uint32_t RX_WINDOW_MIN = 10;
@@ -23,26 +23,29 @@ static constexpr int RFM69_INT = 40;
 static constexpr int RFM69_RST = 41;  
 
 // Initialize static variables
-RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
-uint8_t radioPacketNum = 0; // Set packet number to zero;
+static RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
+static uint8_t radioPacketNum = 0; // Set packet number to zero;
 
-int16_t Radio::radio_avgRSSI = 0;
+static int16_t avgRSSI = 0;
+
+/** Rolling average RSSI of received packets, in dBm. */
+int16_t getAvgRSSI() {return avgRSSI;}
 static float rollingRssi = 0.0f;
 static bool rollingRssiInitialized = false;
 
 constexpr float RSSI_ALPHA = 0.1f;
 
-uint32_t lastTxTime = 0; /** Last transmission time */
+static uint32_t lastTxTime = 0; /** Last transmission time */
 
 static constexpr uint8_t TX_SIZE = 16;
 static constexpr uint8_t RX_SIZE = 16;
 
-static Circular_Buffer<DataPacket, TX_SIZE> radio_tx_buffer; // 16 message tx buffer
-static Circular_Buffer<DataPacket, RX_SIZE> radio_rx_buffer; // 16 message rx buffer
+static Circular_Buffer<DataPacket, TX_SIZE> txBuffer; // 16 message tx buffer
+static Circular_Buffer<DataPacket, RX_SIZE> rxBuffer; // 16 message rx buffer
 
-static uint16_t tx_dropped = 0; /** Number of dropped tx packets */
+static uint16_t txDropped = 0; /** Number of dropped tx packets */
 
-SetupStates setupState = SetupStates::RESET1;
+static SetupStates setupState = SetupStates::RESET1;
 
 /** Stage 2 state: whether the base station has answered our connection ping. */
 static LinkStates linkState = LinkStates::DISCONNECTED;
@@ -53,12 +56,15 @@ static constexpr uint32_t LINK_RETRY_MS = 1000;
 
 static void updateLink();
 
-void radio_handleCommand(Message msg);
-void radio_handleConfig(Message msg);
-void radio_handleSetup(Message msg);
+static void handleCommand(Message msg);
+static void handleConfig(Message msg);
+// TODO: not yet wired into the update() dispatch - the SETUP case currently
+// handles the base-station ACK inline. Kept as the hook for the rest of the
+// handshake; [[maybe_unused]] so internal linkage does not trip -Werror.
+[[maybe_unused]] static void handleSetup(Message msg);
 
 /** Adds message to radio queue */
-void radio_sendMessage(Message data, MessageType type);
+static void sendMessage(Message data, MessageType type);
 
 
 // MARK: Setup
@@ -69,10 +75,10 @@ void radio_sendMessage(Message data, MessageType type);
  * Will return false if an error occured. All errors should
  * be treated as fatal
  */
-bool Radio::setup() {
+bool setup() {
 
     // A variable to help with timing during the setup process
-    static uint32_t setupTimmer;
+    static uint32_t setupTimer;
 
     switch (setupState) {
         case SetupStates::RESET1 :
@@ -80,18 +86,18 @@ bool Radio::setup() {
                 // Run reset sequence
                 digitalWrite(RFM69_RST, HIGH);
 
-                setupTimmer = millis();
+                setupTimer = millis();
 
                 setupState = SetupStates::RESET2;
                 return true;
             break;
         
         case SetupStates::RESET2 :
-            if (millis() - setupTimmer >= 10){
+            if (millis() - setupTimer >= 10){
                 digitalWrite(RFM69_RST, LOW);
             }
 
-            if (millis() - setupTimmer >= 20){
+            if (millis() - setupTimer >= 20){
                 setupState = SetupStates::RADIO_INIT;
                 USB::sendText("Radio Reset");
             }
@@ -128,7 +134,7 @@ bool Radio::setup() {
                 
                 // Hardware is configured, which is as far as the boot state
                 // machine needs to get. Finding the base station is stage 2 and
-                // continues in the background from radio_update().
+                // continues in the background from update().
                 setupState = SetupStates::COMPLETE;
                 return true;
         }
@@ -142,11 +148,11 @@ bool Radio::setup() {
 
 }
 
-bool Radio::setupComplete() {
+bool setupComplete() {
     return setupState == SetupStates::COMPLETE;
 }
 
-bool radio_linkConnected() {
+bool linkConnected() {
     return linkState == LinkStates::CONNECTED;
 }
 
@@ -160,7 +166,7 @@ bool radio_linkConnected() {
  */
 static void updateLink() {
     // The handshake is opt-out; treat it as already satisfied when skipped so
-    // radio_linkConnected() still reports something meaningful to telemetry.
+    // linkConnected() still reports something meaningful to telemetry.
     if (Configs::get().skipRadioHandshake) {
         linkState = LinkStates::CONNECTED;
         return;
@@ -178,14 +184,14 @@ static void updateLink() {
 
     Message conn{};
     memcpy(conn.textArray, "AFCDrone", 8);
-    radio_sendMessage(conn, MessageType::SETUP);
+    sendMessage(conn, MessageType::SETUP);
 
     lastLinkPingTime = millis();
     linkState = LinkStates::AWAITING_ACK;
 }
 
 // MARK: Periodic Update
-void Radio::update() {
+void update() {
     if (!Configs::get().radioEnabled)
         return;
 
@@ -215,7 +221,7 @@ void Radio::update() {
                                 (static_cast<float>(newRssi) - rollingRssi);
                 }
 
-                radio_avgRSSI = static_cast<int16_t>(roundf(rollingRssi));
+                avgRSSI = static_cast<int16_t>(roundf(rollingRssi));
                 
                 // Save the headers
                 uint8_t currentPacketNum = radio.headerId();
@@ -253,11 +259,11 @@ void Radio::update() {
                     break;
                 
                 case MessageType::COMMAND :
-                    radio_handleCommand(msg);
+                    handleCommand(msg);
                     break;
 
                 case MessageType::CONFIG :
-                    radio_handleConfig(msg);
+                    handleConfig(msg);
                     break;
                 
                 default:
@@ -281,8 +287,8 @@ void Radio::update() {
 
         // Send one message from the outgoing buffer
         DataPacket packet;
-        if (radio_tx_buffer.size() != 0) {
-            packet = radio_tx_buffer.pop_front();
+        if (txBuffer.size() != 0) {
+            packet = txBuffer.pop_front();
 
             PacketHeader header{ radioPacketNum++, static_cast<uint8_t>(packet.type) };
 
@@ -305,17 +311,17 @@ void Radio::update() {
 }
 
 /** Adds message to radio queue */
-void radio_sendMessage(Message data, MessageType type) {
-    if (radio_tx_buffer.size() >= TX_SIZE)
-        tx_dropped++;
+static void sendMessage(Message data, MessageType type) {
+    if (txBuffer.size() >= TX_SIZE)
+        txDropped++;
 
-    radio_tx_buffer.push_back({data, type});
+    txBuffer.push_back({data, type});
  
 }
 
 // MARK: Status Senders
 
-void Radio::sendStatus0(const Drone::Telemetry_t& t) {
+void sendStatus0(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status0.loopTimeAvg = t.loopTimeAvg;
@@ -323,10 +329,10 @@ void Radio::sendStatus0(const Drone::Telemetry_t& t) {
     msg.status0.RunTime = t.runtimeSec;
     msg.status0.currentMode = (uint8_t) t.state;
 
-    radio_sendMessage( msg, MessageType::STATUS0);
+    sendMessage( msg, MessageType::STATUS0);
 }
 
-void Radio::sendStatus1(const Drone::Telemetry_t& t) {
+void sendStatus1(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status1.gimbalPitchNorm = t.gimbalPitch;
@@ -334,10 +340,10 @@ void Radio::sendStatus1(const Drone::Telemetry_t& t) {
     msg.status1.topServoSet = t.topServoSet;
     msg.status1.bottomServoSet = t.bottomServoSet;
 
-    radio_sendMessage(msg, MessageType::STATUS1);
+    sendMessage(msg, MessageType::STATUS1);
 }
 
-void Radio::sendStatus2(const Drone::Telemetry_t& t) {
+void sendStatus2(const Drone::Telemetry_t& t) {
     Message msg{};
     
     msg.status2.bottomMotorSet = t.bottomMotorSet;
@@ -345,13 +351,13 @@ void Radio::sendStatus2(const Drone::Telemetry_t& t) {
     msg.status2.voltage = 0; // TODO connect to battery monitor @crheilma-code
     // RSSI is owned by loop() context, not the control tick, so it is read
     // live rather than coming from the snapshot.
-    msg.status2.rssi = radio_avgRSSI;
+    msg.status2.rssi = avgRSSI;
 
-    radio_sendMessage(msg, MessageType::STATUS2);
+    sendMessage(msg, MessageType::STATUS2);
 
 }
 
-void Radio::sendStatus3(const Drone::Telemetry_t& t) {
+void sendStatus3(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status3.qR = floatToFixed(t.qR, RADIO_QUAT_SCALE);
@@ -359,10 +365,10 @@ void Radio::sendStatus3(const Drone::Telemetry_t& t) {
     msg.status3.qJ = floatToFixed(t.qJ, RADIO_QUAT_SCALE);
     msg.status3.qK = floatToFixed(t.qK, RADIO_QUAT_SCALE);
 
-    radio_sendMessage(msg, MessageType::STATUS3);
+    sendMessage(msg, MessageType::STATUS3);
 }
 
-void Radio::sendStatus4(const Drone::Telemetry_t& t) {
+void sendStatus4(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status4.accelX = floatToFixed(t.accelX, RADIO_ACCEL_SCALE);
@@ -370,11 +376,11 @@ void Radio::sendStatus4(const Drone::Telemetry_t& t) {
     msg.status4.accelZ = floatToFixed(t.accelZ, RADIO_ACCEL_SCALE);
     msg.status4.empty = 0;
 
-    radio_sendMessage(msg, MessageType::STATUS4);
+    sendMessage(msg, MessageType::STATUS4);
 
 }
 
-void Radio::sendStatus5(const Drone::Telemetry_t& t) {
+void sendStatus5(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status5.velX = floatToFixed(t.velX, RADIO_VEL_SCALE);
@@ -382,11 +388,11 @@ void Radio::sendStatus5(const Drone::Telemetry_t& t) {
     msg.status5.velZ = floatToFixed(t.velZ, RADIO_VEL_SCALE);
     msg.status5.empty = 0;
 
-    radio_sendMessage(msg, MessageType::STATUS5);
+    sendMessage(msg, MessageType::STATUS5);
 
 }
 
-void Radio::sendStatus6(const Drone::Telemetry_t& t) {
+void sendStatus6(const Drone::Telemetry_t& t) {
     Message msg{};
 
     msg.status6.posX = floatToFixed(t.posX, RADIO_POS_SCALE);
@@ -394,7 +400,7 @@ void Radio::sendStatus6(const Drone::Telemetry_t& t) {
     msg.status6.posZ = floatToFixed(t.posZ, RADIO_POS_SCALE);
     msg.status6.empty = 0;
 
-    radio_sendMessage(msg, MessageType::STATUS6);
+    sendMessage(msg, MessageType::STATUS6);
 }
 
 // MARK: Message Handlers
@@ -402,7 +408,7 @@ void Radio::sendStatus6(const Drone::Telemetry_t& t) {
 /**
  * Handle incoming flight commands from the base station. 
  */
-void radio_handleCommand(Message msg) {
+static void handleCommand(Message msg) {
 
     Drone::Target_t target;
     target.gimbalX = msg.command.gimbalX;
@@ -414,14 +420,14 @@ void radio_handleCommand(Message msg) {
 
 }
 
-void radio_handleConfig(Message msg) {
+static void handleConfig(Message msg) {
     Message response{};
     
     if (msg.config.version != Configs::CONFIG_VERSION){
         response.config.version = Configs::CONFIG_VERSION;
         response.config.state.result = Configs::ConfigResult::UNKNOWN_VERSION;
         response.config.configKey = msg.config.configKey;
-        radio_sendMessage(response, MessageType::CONFIG);
+        sendMessage(response, MessageType::CONFIG);
         return;
     }
 
@@ -432,33 +438,33 @@ void radio_handleConfig(Message msg) {
         response.config.configKey = msg.config.configKey;
         response.config.value = Configs::read(msg.config.configKey,
                                             response.config.state.result);
-        radio_sendMessage(response, MessageType::CONFIG);
+        sendMessage(response, MessageType::CONFIG);
         break;
     case Configs::ConfigOp::SET :
         response.config.version = Configs::CONFIG_VERSION;
         response.config.configKey = msg.config.configKey;
         response.config.state.result =
             Configs::set(msg.config.configKey, msg.config.value);
-        radio_sendMessage(response, MessageType::CONFIG);
+        sendMessage(response, MessageType::CONFIG);
         break;
     default:
         response.config.version = Configs::CONFIG_VERSION;
         response.config.configKey = (Configs::ConfigKey) -1;
         response.config.state.result = Configs::ConfigResult::UNKNOWN_OP;
-        radio_sendMessage(response, MessageType::CONFIG);
+        sendMessage(response, MessageType::CONFIG);
         break;
     }
 
 }
 
-void radio_handleSetup(Message msg) {
+static void handleSetup(Message msg) {
 
 
 }
 
 // MARK: Radio helpers
 [[maybe_unused]]
-static bool radio_getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
+static bool getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
                         , uint8_t& bufferLength ) {
 
     // If radio has no message return false
@@ -471,3 +477,5 @@ static bool radio_getMessage(uint8_t (&buffer)[RH_RF69_MAX_MESSAGE_LEN]
     return true;
 
 }
+
+} // namespace Radio

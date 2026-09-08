@@ -7,8 +7,8 @@
 namespace Radio {
 
 
-
-extern int16_t radio_avgRSSI;
+    /** Rolling average RSSI of received packets, in dBm. */
+    int16_t getAvgRSSI();
 
 
         /**
@@ -29,7 +29,7 @@ extern int16_t radio_avgRSSI;
         /**
         * Stage 2 of radio bring-up: finding the base station.
         *
-        * This runs in the background from radio_update() and is deliberately
+        * This runs in the background from update() and is deliberately
         * NOT part of Radio::setupComplete(). Losing or never finding the base
         * station must not keep the vehicle from arming, so the drone reaches
         * READY_ARMED regardless of what this reports.
@@ -44,7 +44,7 @@ extern int16_t radio_avgRSSI;
 
         /**
          * True once the RFM69 is configured and able to send and receive.
-         * Does NOT imply a base station is listening - see radio_linkConnected().
+         * Does NOT imply a base station is listening - see linkConnected().
          */
         bool setupComplete();
 
@@ -143,7 +143,21 @@ extern int16_t radio_avgRSSI;
             uint32_t value;
         };
 
-        // uinion all of the radio messages for type safety
+        // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything
+        // that changes one of these silently breaks every ground-station and
+        // dashboard client parsing it. See docs/code-conventions.md section 9.
+        static_assert(sizeof(StatusMsg0_t) == 8, "StatusMsg0_t wire size changed");
+        static_assert(sizeof(StatusMsg1_t) == 8, "StatusMsg1_t wire size changed");
+        static_assert(sizeof(StatusMsg2_t) == 8, "StatusMsg2_t wire size changed");
+        static_assert(sizeof(StatusMsg3_t) == 8, "StatusMsg3_t wire size changed");
+        static_assert(sizeof(StatusMsg4_t) == 8, "StatusMsg4_t wire size changed");
+        static_assert(sizeof(StatusMsg5_t) == 8, "StatusMsg5_t wire size changed");
+        static_assert(sizeof(StatusMsg6_t) == 8, "StatusMsg6_t wire size changed");
+        static_assert(sizeof(StatusMsg7_t) == 8, "StatusMsg7_t wire size changed");
+        static_assert(sizeof(Command_t) == 8, "Command_t wire size changed");
+        static_assert(sizeof(ConfigPacket) == 8, "ConfigPacket wire size changed");
+
+        // union all of the radio messages for type safety
         union Message {
             uint64_t raw;
             StatusMsg0_t status0;

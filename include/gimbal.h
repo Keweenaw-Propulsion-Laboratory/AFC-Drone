@@ -5,14 +5,14 @@
 #include <Servo.h>
 
 // Servo GPIO pins
-#define PITCH_SERVO_PIN 24
-#define YAW_SERVO_PIN 25
+constexpr int PITCH_SERVO_PIN = 24;
+constexpr int YAW_SERVO_PIN = 25;
 
 // Extents of the servo lookup tables, which are transcribed straight from
 // docs/ServoLookupTable.csv. That sheet is laid out one ROW per yaw setpoint
 // and one COLUMN per pitch setpoint, so the maps are indexed [yaw][pitch].
-#define YAW_ROWS 9
-#define PITCH_COLS 9
+constexpr int YAW_ROWS = 9;
+constexpr int PITCH_COLS = 9;
 
 namespace Gimbal {
 
@@ -31,7 +31,7 @@ namespace Gimbal {
      * This routine will move each servo to its maximum allowed deflection in
      * both directions.
      * 
-     * @warning This call is blocking and takes approximatley 4 seconds to
+     * @warning This call is blocking and takes approximately 4 seconds to
      * complete. 
      * 
      * @param lookup When true self test will run the set points through the
@@ -47,7 +47,7 @@ namespace Gimbal {
     /**The current yaw of the gimbal mechanism */
     float getYaw();
 
-    uint16_t getTopSevo();
+    uint16_t getTopServo();
     uint16_t getBottomServo();
 
 };

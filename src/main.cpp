@@ -7,10 +7,6 @@
 #include "usb.h"
 #include "configs.h"
 
-#define onboard 13
-
-#define LOOP_STATUS_INTERVAL 2000 // 2000 ms
-
 void setup() {
     Configs::load(); // Load configs from flash
 

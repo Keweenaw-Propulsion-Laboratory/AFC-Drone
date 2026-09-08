@@ -1,34 +1,77 @@
 #include "gyro.h"
 #include "usb.h"
 
-Adafruit_BNO08x Gyro::gyro(GYRO_RESET);
-Gyro::euler_t Gyro::ypr;
-sh2_SensorValue_t Gyro::sensorValue;
+namespace Gyro {
 
-Gyro::DroneState Gyro::droneState;
+// ---- module state: private to this file (conventions section 5) ----
 
-Gyro::GyroSetupStates Gyro::state = Gyro::GyroSetupStates::I2C;
+struct euler_t {
+    float yaw;
+    float pitch;
+    float roll;
+};
 
-float Gyro::worldAccelX = 0.0f;
-float Gyro::worldAccelY = 0.0f;
-float Gyro::worldAccelZ = 0.0f;
+enum GyroSetupStates : uint8_t {
+    I2C,
+    EnableReport,
+    Complete
+};
 
-// Identity quaternion until the first rotation vector report arrives
-float Gyro::quatReal = 1.0f;
-float Gyro::quatI = 0.0f;
-float Gyro::quatJ = 0.0f;
-float Gyro::quatK = 0.0f;
+static Adafruit_BNO08x gyro(GYRO_RESET);
+static euler_t ypr;
+static sh2_SensorValue_t sensorValue;
 
-float Gyro::droneQuatReal = 1.0f;
-float Gyro::droneQuatI = 0.0f;
-float Gyro::droneQuatJ = 0.0f;
-float Gyro::droneQuatK = 0.0f;
+static DroneState droneState;
 
-bool Gyro::setup() {
+static GyroSetupStates state = GyroSetupStates::I2C;
+
+static float worldAccelX = 0.0f;
+static float worldAccelY = 0.0f;
+static float worldAccelZ = 0.0f;
+
+// Identity quaternion until the first rotation vector report arrives.
+// Raw BNO08x sensor frame - not published; consumers want the drone-frame
+// quaternion below.
+static float quatReal = 1.0f;
+static float quatI = 0.0f;
+static float quatJ = 0.0f;
+static float quatK = 0.0f;
+
+static float droneQuatReal = 1.0f;
+static float droneQuatI = 0.0f;
+static float droneQuatJ = 0.0f;
+static float droneQuatK = 0.0f;
+
+static uint32_t lastCheck = 0;
+
+// ---- internal helpers ----
+
+static void updateDeadReckoning(float wX, float wY, float wZ);
+static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees = false);
+[[maybe_unused]] static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees = false);
+[[maybe_unused]] static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees = false);
+static void transformToWorldFrame(float qW, float qX, float qY, float qZ, float ax, float ay, float az,
+                                  float& worldX, float& worldY, float& worldZ);
+[[maybe_unused]] static void debug();
+
+// ---- read accessors for state the rest of the vehicle consumes ----
+
+float getQuatReal() {return droneQuatReal;}
+float getQuatI() {return droneQuatI;}
+float getQuatJ() {return droneQuatJ;}
+float getQuatK() {return droneQuatK;}
+
+float getWorldAccelX() {return worldAccelX;}
+float getWorldAccelY() {return worldAccelY;}
+float getWorldAccelZ() {return worldAccelZ;}
+
+const DroneState& getDroneState() {return droneState;}
+
+bool setup() {
 
     switch (state)
     {
-    case Gyro::GyroSetupStates::I2C :
+    case GyroSetupStates::I2C :
         if (! gyro.begin_I2C()) {
             // TODO add error
             USB::sendText("Gyro I2C failed");
@@ -41,7 +84,7 @@ bool Gyro::setup() {
         state = EnableReport;
         break;
     
-    case Gyro::GyroSetupStates::EnableReport :
+    case GyroSetupStates::EnableReport :
         USB::sendText("BN0085 connected");
         /*
         This section of the setup determines what kind of data we want to 
@@ -68,11 +111,11 @@ bool Gyro::setup() {
     return true;
 }
 
-bool Gyro::setupComplete() {
+bool setupComplete() {
     return state == GyroSetupStates::Complete;
 }
 
-void Gyro::update(){
+void update(){
     // If gyro is not initialized, skip
     if (state != GyroSetupStates::Complete) return;
 
@@ -144,21 +187,20 @@ void Gyro::update(){
     }
 }
 
-float Gyro::getPitch() {
+float getPitch() {
     return ypr.pitch;
 }
 
-float Gyro::getYaw() {
+float getYaw() {
     return ypr.yaw;
 }
 
-float Gyro::getRoll() {
+float getRoll() {
     return ypr.roll;
 }
 
 
-uint32_t Gyro::lastCheck = 0;
-void Gyro::updateDeadReckoning(float wX, float wY, float wZ) {
+static void updateDeadReckoning(float wX, float wY, float wZ) {
     uint32_t now = micros();
 
     // Skip first loop to get accurate times
@@ -197,7 +239,7 @@ void Gyro::updateDeadReckoning(float wX, float wY, float wZ) {
 
 
 
-void Gyro::quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees) {
+static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees) {
 
     float sqr = sq(qr);
     float sqi = sq(qi);
@@ -215,16 +257,16 @@ void Gyro::quaternionToEuler(float qr, float qi, float qj, float qk, bool degree
     }
 }
 
-void Gyro::quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees) {
+static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees) {
     quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, degrees);
 }
 
-void Gyro::quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees) {
+static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees) {
     quaternionToEuler(rotational_vector->real, rotational_vector->i, rotational_vector->j, rotational_vector->k, degrees);
 }
 
 // Transforms raw sensor acceleration into stable world-frame acceleration
-void Gyro::transformToWorldFrame(float qW, float qX, float qY, float qZ, 
+static void transformToWorldFrame(float qW, float qX, float qY, float qZ, 
                            float ax, float ay, float az, 
                            float& worldX, float& worldY, float& worldZ) {
     // 3D Rotation Matrix derived directly from the orientation quaternion
@@ -248,9 +290,9 @@ void Gyro::transformToWorldFrame(float qW, float qX, float qY, float qZ,
 
 
 
-elapsedMillis debugTimmer;
-uint8_t report = 0;
-void Gyro::debug() {
+static elapsedMillis debugTimer;
+static uint8_t report = 0;
+static void debug() {
 //     if (gyro.getSensorEvent(&sensorValue)) {
 //         // in this demo only one report type will be received depending on FAST_MODE define (above)
 //         switch (sensorValue.sensorId) {
@@ -271,7 +313,7 @@ void Gyro::debug() {
 //     Serial.println(ypr.roll);
 //   }
 
-    if ( debugTimmer > 500 ) {
+    if ( debugTimer > 500 ) {
         char debugOut[128];
 
         switch (report)
@@ -290,6 +332,8 @@ void Gyro::debug() {
 
         report = !report;
 
-        debugTimmer -= 500;
+        debugTimer -= 500;
     }
 }
+
+} // namespace Gyro

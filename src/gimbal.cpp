@@ -4,10 +4,11 @@
 #include "configs.h"
 #include "Arduino.h"
 
-using namespace Gimbal;
+namespace Gimbal {
 
-#define PITCH_ZERO 90 // Degrees. Some difference in these is normal to account for tooth placement. 
-#define YAW_ZERO 89 // Degrees. Some difference in these is normal to account for tooth placement
+// Degrees. Some difference in these is normal to account for tooth placement.
+static constexpr int PITCH_ZERO = 90;
+static constexpr int YAW_ZERO = 89;
 
 static Servo pitchServo;
 static Servo yawServo;
@@ -57,7 +58,7 @@ int limitRange(int val, int low, int high){
     return val;
 }
 
-void Gimbal::setup() {
+void setup() {
     pitchServo.attach(PITCH_SERVO_PIN);
     yawServo.attach(YAW_SERVO_PIN);
 }
@@ -83,7 +84,7 @@ void setBotServo(float angle) {
     yawServo.write(bottomServo);
 }
 
-void Gimbal::set(float pitch, float yaw) {
+void set(float pitch, float yaw) {
 
     // Update set points
     currentPitch = pitch;
@@ -148,11 +149,11 @@ void Gimbal::set(float pitch, float yaw) {
 
 }
 
-void Gimbal::zero() {
+void zero() {
     set(0,0);
 }
 
-void Gimbal::selfTest(bool lookup) {
+void selfTest(bool lookup) {
     if (lookup) {
         set(-30, 0);
         delay(1000);
@@ -182,7 +183,9 @@ void Gimbal::selfTest(bool lookup) {
     } 
 }
 
-float Gimbal::getPitch() {return currentPitch;}
-float Gimbal::getYaw() {return currentYaw;}
-uint16_t Gimbal::getTopSevo() {return topServo;}
-uint16_t Gimbal::getBottomServo() {return bottomServo;}
+float getPitch() {return currentPitch;}
+float getYaw() {return currentYaw;}
+uint16_t getTopServo() {return topServo;}
+uint16_t getBottomServo() {return bottomServo;}
+
+} // namespace Gimbal

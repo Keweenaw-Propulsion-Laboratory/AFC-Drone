@@ -4,14 +4,14 @@
 #include <cstring>
 #include "drone.h"
 
-using namespace Configs;
+namespace Configs {
 static constexpr uint32_t CONFIG_MAGIC = 0x41455245; // AERE
-const uint8_t Configs::CONFIG_VERSION = 2;
+const uint8_t CONFIG_VERSION = 2;
 static constexpr int EEPROM_ADDRESS = 0;
 
-PersistentConfig config{};
+static PersistentConfig config{};
 
-static void config_migrate(PersistentConfig &stored);
+static void migrate(PersistentConfig &stored);
 
 /**
  * PersistentConfig as it was laid out at CONFIG_VERSION 1.
@@ -63,7 +63,7 @@ PersistentConfig defaults()
  * Byte sum over a config image with the crc field zeroed.
  *
  * Templated so a stored image from an older CONFIG_VERSION can be validated
- * with the same rule before its fields are trusted by config_migrate().
+ * with the same rule before its fields are trusted by migrate().
  * Takes its argument by value: the copy is what gets its crc zeroed.
  */
 template <typename ConfigT>
@@ -79,7 +79,7 @@ static uint16_t checksum(ConfigT image)
     return sum;
 }
 
-void Configs::save()
+void save()
 {
     // If drone is inflight do run blocking save to EEPROM.
     if (Drone::getState() == Drone::States::FLIGHT)
@@ -93,7 +93,7 @@ void Configs::save()
     EEPROM.put(EEPROM_ADDRESS, config);
 }
 
-void Configs::load()
+void load()
 {
     PersistentConfig stored{};
     EEPROM.get(EEPROM_ADDRESS, stored);
@@ -109,7 +109,7 @@ void Configs::load()
     }
     else if (stored.version != CONFIG_VERSION)
     {
-        config_migrate(stored);
+        migrate(stored);
     }
     else
     {
@@ -119,15 +119,15 @@ void Configs::load()
     }
 }
 
-const PersistentConfig &Configs::get() {
+const PersistentConfig &get() {
     return config;
 }
 
-PersistentConfig &Configs::mutableGet() {
+PersistentConfig &mutableGet() {
     return config;
 }
 
-void Configs::restoreDefaults() {
+void restoreDefaults() {
     config = defaults();
     Configs::save();
 }
@@ -206,7 +206,7 @@ static ConfigResult apply(ConfigKey key, int32_t value, bool &changed)
     return ConfigResult::OK;
 }
 
-ConfigResult Configs::set(ConfigKey key, int32_t value) {
+ConfigResult set(ConfigKey key, int32_t value) {
     if (Drone::getState() == Drone::States::FLIGHT)
     {
         return ConfigResult::UNSAFE_STATE;
@@ -223,7 +223,7 @@ ConfigResult Configs::set(ConfigKey key, int32_t value) {
     return result;
 }
 
-void Configs::setBatch(const ConfigUpdate *updates, ConfigResult *results,
+void setBatch(const ConfigUpdate *updates, ConfigResult *results,
                       uint8_t count)
 {
     if (updates == nullptr)
@@ -254,7 +254,7 @@ void Configs::setBatch(const ConfigUpdate *updates, ConfigResult *results,
         Configs::save();
 }
 
-int32_t Configs::read(ConfigKey key, ConfigResult &status)
+int32_t read(ConfigKey key, ConfigResult &status)
 {
     status = ConfigResult::OK;
     switch (key)
@@ -293,7 +293,7 @@ int32_t Configs::read(ConfigKey key, ConfigResult &status)
     return 0;
 }
 
-static void config_migrate(PersistentConfig &stored)
+static void migrate(PersistentConfig &stored)
 {
     switch (stored.version)
     {
@@ -343,3 +343,5 @@ static void config_migrate(PersistentConfig &stored)
     // Save migrated configs
     Configs::save();
 }
+
+} // namespace Configs

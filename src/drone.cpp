@@ -15,7 +15,7 @@ static constexpr uint8_t CONTROL_TIMER_PRIORITY = 64;
 
 static constexpr int STATUS_LED = -1; // TODO wire LED on flight computer
 
-using namespace Drone;
+namespace Drone {
 
 // Initialize state to BOOT
 static volatile States state = States::BOOT;
@@ -41,13 +41,13 @@ static volatile uint32_t missedTicks = 0;
 static Telemetry_t telemetry{};
 
 // Hardware timer driving the control loop tick
-IntervalTimer controlTimer;
+static IntervalTimer controlTimer;
 
-static Target_t drone_targ0;
+static Target_t activeTarget;
 
 // MARK: Helpers
 
-States Drone::getState() {return state;}
+States getState() {return state;}
 
 /**
  * ISR fired by the hardware timer at CONTROL_LOOP_HZ.
@@ -99,13 +99,13 @@ void startControlTimer() {
     controlTimer.priority(CONTROL_TIMER_PRIORITY);
 }
 
-uint16_t Drone::getLastLoopTime() {return lastLoopTime;}
-uint16_t Drone::getWorstTime() {return worstTime;}
-uint16_t Drone::getBestTime() {return bestTime;}
-uint16_t Drone::getRollAvg() {return rollAvg;}
-uint32_t Drone::getMissedTicks() {return missedTicks;}
+uint16_t getLastLoopTime() {return lastLoopTime;}
+uint16_t getWorstTime() {return worstTime;}
+uint16_t getBestTime() {return bestTime;}
+uint16_t getRollAvg() {return rollAvg;}
+uint32_t getMissedTicks() {return missedTicks;}
 
-void Drone::getTelemetry(Telemetry_t& out) {
+void getTelemetry(Telemetry_t& out) {
     // The ISR writes `telemetry` field by field. Without this guard a read
     // from loop() can straddle a tick and return a mix of two instants - a
     // quaternion whose components come from different orientations, say.
@@ -199,11 +199,11 @@ void updateLEDS() {
     }
 }
 
-void Drone::setTarget(Target_t target) {
-    drone_targ0.gimbalX = target.gimbalX;
-    drone_targ0.gimbalY = target.gimbalY;
-    drone_targ0.bottomMotor = target.bottomMotor;
-    drone_targ0.topMotor = target.topMotor;
+void setTarget(Target_t target) {
+    activeTarget.gimbalX = target.gimbalX;
+    activeTarget.gimbalY = target.gimbalY;
+    activeTarget.bottomMotor = target.bottomMotor;
+    activeTarget.topMotor = target.topMotor;
 }
 
 
@@ -212,7 +212,7 @@ void Drone::setTarget(Target_t target) {
 /**
  * Performs the startup sequence
  */
-bool Drone::startup() {
+bool startup() {
     // Step 1 Radio
     USB::update(); // Update the USB stack to allow for prints
     updateLEDS(); // Update status LEDS
@@ -322,7 +322,7 @@ static void recordTelemetry() {
 
     telemetry.gimbalPitch    = Gimbal::getPitch();
     telemetry.gimbalYaw      = Gimbal::getYaw();
-    telemetry.topServoSet    = Gimbal::getTopSevo();
+    telemetry.topServoSet    = Gimbal::getTopServo();
     telemetry.bottomServoSet = Gimbal::getBottomServo();
 
     telemetry.topMotorSet    = Motor::getTopSpeed();
@@ -333,22 +333,22 @@ static void recordTelemetry() {
     // two different sensor reports. Publishing the gyro's output through a
     // double buffer would close that hole; see the control-loop notes in
     // docs/code-conventions.md.
-    telemetry.qR = Gyro::droneQuatReal;
-    telemetry.qI = Gyro::droneQuatI;
-    telemetry.qJ = Gyro::droneQuatJ;
-    telemetry.qK = Gyro::droneQuatK;
+    telemetry.qR = Gyro::getQuatReal();
+    telemetry.qI = Gyro::getQuatI();
+    telemetry.qJ = Gyro::getQuatJ();
+    telemetry.qK = Gyro::getQuatK();
 
-    telemetry.accelX = Gyro::worldAccelX;
-    telemetry.accelY = Gyro::worldAccelY;
-    telemetry.accelZ = Gyro::worldAccelZ;
+    telemetry.accelX = Gyro::getWorldAccelX();
+    telemetry.accelY = Gyro::getWorldAccelY();
+    telemetry.accelZ = Gyro::getWorldAccelZ();
 
-    telemetry.velX = Gyro::droneState.velocity.x;
-    telemetry.velY = Gyro::droneState.velocity.y;
-    telemetry.velZ = Gyro::droneState.velocity.z;
+    telemetry.velX = Gyro::getDroneState().velocity.x;
+    telemetry.velY = Gyro::getDroneState().velocity.y;
+    telemetry.velZ = Gyro::getDroneState().velocity.z;
 
-    telemetry.posX = Gyro::droneState.position.x;
-    telemetry.posY = Gyro::droneState.position.y;
-    telemetry.posZ = Gyro::droneState.position.z;
+    telemetry.posX = Gyro::getDroneState().position.x;
+    telemetry.posY = Gyro::getDroneState().position.y;
+    telemetry.posZ = Gyro::getDroneState().position.z;
 }
 
 /**
@@ -356,11 +356,11 @@ static void recordTelemetry() {
  *
  * @warning Called from onControlTick(), i.e. in INTERRUPT CONTEXT.
  */
-void Drone::update() {
+void update() {
     static Target_t activeSlot;
     static constexpr float GIMBAL_INT16_TO_FLOAT = 1638.0f;
 
-    memcpy(&activeSlot, &drone_targ0, sizeof(Target_t));
+    memcpy(&activeSlot, &activeTarget, sizeof(Target_t));
 
     // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
     Gimbal::set(activeSlot.gimbalX / GIMBAL_INT16_TO_FLOAT, 
@@ -371,3 +371,5 @@ void Drone::update() {
 
     recordTelemetry();
 }
+
+} // namespace Drone

@@ -14,7 +14,7 @@ between the Drone and a pysically connected Serial terminal
 #include "Arduino.h"
 #include "circular_buffer.h"
 
-using namespace USB;
+namespace USB {
 
 static constexpr uint8_t MAX_DATA_LEN = 60; /** Max usb data length */
 static constexpr uint8_t USB_SYNC_0 = 0xA5;
@@ -147,7 +147,7 @@ union __attribute__((packed)) Message {
 
 // Payload for USB type RADIO_PACKET.  RadioHead carries its headers outside
 // the eight-byte RF payload, so retain them explicitly for the USB decoder.
-struct __attribute__((packed)) usb_radio_packet_t {
+struct __attribute__((packed)) radio_packet_t {
     RadioDirection direction;
     uint8_t packetNum;
     Radio::MessageType type;
@@ -155,25 +155,25 @@ struct __attribute__((packed)) usb_radio_packet_t {
 };
 
 
-struct __attribute__((packed)) usb_header_t {
+struct __attribute__((packed)) header_t {
     uint16_t packetNum;
     MessageTypes type;
     uint8_t packetLength;
 };
 
-static_assert(sizeof(usb_header_t) == 4, "USB header wire size changed");
+static_assert(sizeof(header_t) == 4, "USB header wire size changed");
 
-struct __attribute__((packed)) usb_packet_t {
-    usb_header_t header;
+struct __attribute__((packed)) packet_t {
+    header_t header;
     Message data;
 
-    usb_packet_t(int = 0) : header{0, (MessageTypes) 0, 0} {}
+    packet_t(int = 0) : header{0, (MessageTypes) 0, 0} {}
 };
 
-static_assert(sizeof(usb_packet_t) <= 64, "USB packets must be 64 bytes or less");
+static_assert(sizeof(packet_t) <= 64, "USB packets must be 64 bytes or less");
 static_assert(sizeof(Command) == 8, "USB command wire size changed");
 static_assert(sizeof(Telemetry) <= MAX_DATA_LEN, "Telemetry exceeds USB payload limit");
-static_assert(sizeof(usb_radio_packet_t) == 11, "USB radio relay wire size changed");
+static_assert(sizeof(radio_packet_t) == 11, "USB radio relay wire size changed");
 static_assert(sizeof(Config) == MAX_DATA_LEN, "USB config request layout changed");
 static_assert(sizeof(ConfigResponse) == 31, "USB config response layout changed");
 static_assert(sizeof(ConfigReadResponse) == MAX_DATA_LEN,
@@ -183,15 +183,15 @@ static_assert(sizeof(ConfigReadResponse) == MAX_DATA_LEN,
 
 
 
-static Circular_Buffer<usb_packet_t, 16> usb_tx_buffer;
-static Circular_Buffer<usb_packet_t, 16> usb_rx_buffer;
+static Circular_Buffer<packet_t, 16> txBuffer;
+static Circular_Buffer<packet_t, 16> rxBuffer;
 
-static uint16_t usb_global_packet_number = 0;
+static uint16_t globalPacketNumber = 0;
 
-static void usb_handleConfig(const Message& msg, uint8_t packetLength);
+static void handleConfig(const Message& msg, uint8_t packetLength);
 static void send(Message data, MessageTypes type, int length);
 
-static uint16_t usb_crc16_update(uint16_t crc, uint8_t value) {
+static uint16_t crc16Update(uint16_t crc, uint8_t value) {
     crc ^= static_cast<uint16_t>(value) << 8;
     for (uint8_t bit = 0; bit < 8; ++bit) {
         crc = (crc & 0x8000) ? static_cast<uint16_t>((crc << 1) ^ 0x1021)
@@ -200,19 +200,19 @@ static uint16_t usb_crc16_update(uint16_t crc, uint8_t value) {
     return crc;
 }
 
-static uint16_t usb_packet_crc(const usb_packet_t& packet) {
+static uint16_t packetCrc(const packet_t& packet) {
     uint16_t crc = 0xFFFF; // CRC-16/CCITT-FALSE initial value
     const uint8_t* header = reinterpret_cast<const uint8_t*>(&packet.header);
-    for (size_t i = 0; i < sizeof(usb_header_t); ++i) {
-        crc = usb_crc16_update(crc, header[i]);
+    for (size_t i = 0; i < sizeof(header_t); ++i) {
+        crc = crc16Update(crc, header[i]);
     }
     for (uint8_t i = 0; i < packet.header.packetLength; ++i) {
-        crc = usb_crc16_update(crc, packet.data.raw[i]);
+        crc = crc16Update(crc, packet.data.raw[i]);
     }
     return crc;
 }
 
-static bool usb_is_valid_rx_header(const usb_header_t& header) {
+static bool isValidRxHeader(const header_t& header) {
     if (header.type == MessageTypes::COMMAND) {
         return header.packetLength == sizeof(Command);
     }
@@ -232,7 +232,7 @@ static bool usb_is_valid_rx_header(const usb_header_t& header) {
  * Reads any new USB packets into the rx buffer
  * Sends out any packets in the tx buffer
  */
-void USB::update() {
+void update() {
 
     if (!Serial) {
         return;
@@ -240,7 +240,7 @@ void USB::update() {
 
     enum class RxState { FIND_SYNC_0, FIND_SYNC_1, READ_VERSION, READ_HEADER, READ_PAYLOAD, READ_CRC_0, READ_CRC_1 };
     static RxState rx_state = RxState::FIND_SYNC_0;
-    static usb_packet_t temp_rx_pkt;
+    static packet_t temp_rx_pkt;
     static uint8_t rxBytesRead = 0;
     static uint8_t crc_bytes[2];
 
@@ -266,9 +266,9 @@ void USB::update() {
             uint8_t* headerPtr = reinterpret_cast<uint8_t*>(&temp_rx_pkt);
             headerPtr[rxBytesRead++] = newByte;
 
-            if (rxBytesRead == sizeof(usb_header_t)) {
+            if (rxBytesRead == sizeof(header_t)) {
                 rxBytesRead = 0;
-                if (usb_is_valid_rx_header(temp_rx_pkt.header)) {
+                if (isValidRxHeader(temp_rx_pkt.header)) {
                     rx_state = RxState::READ_PAYLOAD;
                 } else {
                     rx_state = RxState::FIND_SYNC_0;
@@ -289,8 +289,8 @@ void USB::update() {
             crc_bytes[1] = newByte;
             const uint16_t received_crc = static_cast<uint16_t>(crc_bytes[0]) |
                                           (static_cast<uint16_t>(crc_bytes[1]) << 8);
-            if (received_crc == usb_packet_crc(temp_rx_pkt) && usb_rx_buffer.size() < 16) {
-                usb_rx_buffer.push_back(temp_rx_pkt);
+            if (received_crc == packetCrc(temp_rx_pkt) && rxBuffer.size() < 16) {
+                rxBuffer.push_back(temp_rx_pkt);
             }
             rx_state = RxState::FIND_SYNC_0;
        }
@@ -298,24 +298,24 @@ void USB::update() {
     }
 
     // Transmit
-    if (usb_tx_buffer.size() > 0) {
+    if (txBuffer.size() > 0) {
         // Circular_Buffer::front() returns storage for its optional multi-byte
         // mode, not the normal object queue used here.  peek() returns the
         // actual queued packet and therefore its real payload length.
-        const usb_packet_t pkt = usb_tx_buffer.peek();
+        const packet_t pkt = txBuffer.peek();
         const size_t tx_bytes = USB_FRAME_OVERHEAD + pkt.header.packetLength;
 
         // Check if the outbound buffer has enough room
         if (Serial.availableForWrite() >= (int) tx_bytes) {
-            usb_packet_t tx_packet = usb_tx_buffer.pop_front();
+            packet_t tx_packet = txBuffer.pop_front();
             uint8_t frame[USB_FRAME_OVERHEAD + MAX_DATA_LEN];
             frame[0] = USB_SYNC_0;
             frame[1] = USB_SYNC_1;
             frame[2] = USB_PROTOCOL_VERSION;
-            memcpy(frame + 3, &tx_packet.header, sizeof(usb_header_t));
-            memcpy(frame + 3 + sizeof(usb_header_t), tx_packet.data.raw,
+            memcpy(frame + 3, &tx_packet.header, sizeof(header_t));
+            memcpy(frame + 3 + sizeof(header_t), tx_packet.data.raw,
                    tx_packet.header.packetLength);
-            const uint16_t crc = usb_packet_crc(tx_packet);
+            const uint16_t crc = packetCrc(tx_packet);
             frame[tx_bytes - 2] = static_cast<uint8_t>(crc);
             frame[tx_bytes - 1] = static_cast<uint8_t>(crc >> 8);
             Serial.write(frame, tx_bytes);
@@ -324,8 +324,8 @@ void USB::update() {
 
 
     // If there are full packets in the rx buffer parse them
-    if (usb_rx_buffer.size() > 0) {
-        usb_packet_t pkt = usb_rx_buffer.pop_front();
+    if (rxBuffer.size() > 0) {
+        packet_t pkt = rxBuffer.pop_front();
 
         
         switch (pkt.header.type) {
@@ -352,7 +352,7 @@ void USB::update() {
             break;
 
         case MessageTypes::CONFIG:
-            usb_handleConfig(pkt.data, pkt.header.packetLength);
+            handleConfig(pkt.data, pkt.header.packetLength);
 
             break;
         
@@ -363,24 +363,24 @@ void USB::update() {
 }
 
 static void send(Message data, MessageTypes type, int length) {
-    if (length < 0 || length > MAX_DATA_LEN || usb_tx_buffer.size() >= 16) {
+    if (length < 0 || length > MAX_DATA_LEN || txBuffer.size() >= 16) {
         return;
     }
-    usb_header_t header {usb_global_packet_number++, type, (uint8_t) length};
-    usb_packet_t packet;
+    header_t header {globalPacketNumber++, type, (uint8_t) length};
+    packet_t packet;
 
     memcpy(packet.data.raw, data.raw, length );
-    memcpy(&packet.header, &header, sizeof(usb_header_t));
+    memcpy(&packet.header, &header, sizeof(header_t));
 
-    usb_tx_buffer.push_back(packet);
+    txBuffer.push_back(packet);
 
 
 }
 
-void USB::radioRelay(const Radio::Message& message, Radio::MessageType type,
+void radioRelay(const Radio::Message& message, Radio::MessageType type,
                      uint8_t packetNum, RadioDirection direction) {
     Message tx_message{};
-    usb_radio_packet_t relay{direction, packetNum, type, message};
+    radio_packet_t relay{direction, packetNum, type, message};
     memcpy(tx_message.raw, &relay, sizeof(relay));
     send(tx_message, MessageTypes::RADIO_PACKET, sizeof(relay));
 }
@@ -388,7 +388,7 @@ void USB::radioRelay(const Radio::Message& message, Radio::MessageType type,
 /**
  * Send usb debug messages 
  */
-void USB::sendText(const char* message, int length) {
+void sendText(const char* message, int length) {
     if (message == nullptr || length <= 0 ) {
         return;
     }
@@ -410,7 +410,7 @@ void USB::sendText(const char* message, int length) {
     }
 }
 
-void USB::sendTelemetry(const Drone::Telemetry_t& t) {
+void sendTelemetry(const Drone::Telemetry_t& t) {
     Message tx_message;
 
     tx_message.telemetry.loopTimeAvg = t.loopTimeAvg;
@@ -418,7 +418,7 @@ void USB::sendTelemetry(const Drone::Telemetry_t& t) {
     tx_message.telemetry.runTime = t.runtimeSec; // Run time in seconds
     // RSSI and voltage are owned by loop() context, not the control tick, so
     // they are read live rather than coming from the snapshot.
-    tx_message.telemetry.rssi = Radio::radio_avgRSSI;
+    tx_message.telemetry.rssi = Radio::getAvgRSSI();
     tx_message.telemetry.currentMode = (uint8_t) t.state;
     tx_message.telemetry.gimbalPitch = t.gimbalPitch;
     tx_message.telemetry.gimbalYaw = t.gimbalYaw;
@@ -446,7 +446,7 @@ void USB::sendTelemetry(const Drone::Telemetry_t& t) {
     send(tx_message, MessageTypes::TELEMETRY, sizeof(Telemetry));
 }
 
-static void usb_handleConfig(const Message& msg, uint8_t packetLength) {
+static void handleConfig(const Message& msg, uint8_t packetLength) {
     constexpr uint8_t CONFIG_HEADER_SIZE = 3;
     constexpr uint8_t CONFIG_ENTRY_SIZE = sizeof(Configs::ConfigKey) + sizeof(int32_t);
     constexpr uint8_t MAX_CONFIG_ENTRIES = 9;
@@ -545,3 +545,5 @@ static void usb_handleConfig(const Message& msg, uint8_t packetLength) {
         entryCount * sizeof(ConfigStatus);
     send(response, MessageTypes::CONFIG, responseLength);
 }
+
+} // namespace USB

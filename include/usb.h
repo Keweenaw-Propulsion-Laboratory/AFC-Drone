@@ -26,7 +26,7 @@ enum class MessageTypes : uint8_t {
 
 // Wire format: 0xA5 0x5A, version, packetNum (little-endian), type, length,
 // payload, CRC-16/CCITT-FALSE (little-endian). CRC excludes the sync bytes.
-static constexpr uint8_t USB_PROTOCOL_VERSION = 1;
+constexpr uint8_t USB_PROTOCOL_VERSION = 1;
 
 enum class RadioDirection : uint8_t {
     RECEIVED = 0,

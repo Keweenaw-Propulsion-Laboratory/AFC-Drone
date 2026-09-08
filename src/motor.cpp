@@ -3,7 +3,7 @@
 #include "Servo.h"
 #include "configs.h"
 
-using namespace Motor;
+namespace Motor {
 
 static constexpr int BOTTOM_MOTOR_PIN = 29;
 static constexpr int TOP_MOTOR_PIN = 28;
@@ -19,14 +19,14 @@ static uint16_t bottomSetSpeed = 0;
 static uint16_t topSetSpeed = 0;
 
 //MARK: Helpers
-uint16_t Motor::getBottomSpeed() {return bottomSetSpeed;}
-uint16_t Motor::getTopSpeed() {return topSetSpeed;}
+uint16_t getBottomSpeed() {return bottomSetSpeed;}
+uint16_t getTopSpeed() {return topSetSpeed;}
 
 
 
 //MARK: Motor Logic
 
-void Motor::setup() {
+void setup() {
     bottomMotor.attach(BOTTOM_MOTOR_PIN);
     topMotor.attach(TOP_MOTOR_PIN);
 
@@ -35,7 +35,7 @@ void Motor::setup() {
     topMotor.writeMicroseconds(ESC_MIN_US);
 }
 
-void Motor::setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
+void setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
     // Clamp in signed space. The trim offset is signed, so the sum must stay
     // signed until it is known to be in range - narrowing first would wrap a
@@ -72,3 +72,5 @@ void Motor::setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
     bottomMotor.writeMicroseconds(bottomSpeed);
     topMotor.writeMicroseconds(topSpeed);
 }
+
+} // namespace Motor
