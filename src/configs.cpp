@@ -4,13 +4,14 @@
 #include <cstring>
 #include "drone.h"
 
+namespace Configs {
 static constexpr uint32_t CONFIG_MAGIC = 0x41455245; // AERE
 const uint8_t CONFIG_VERSION = 2;
 static constexpr int EEPROM_ADDRESS = 0;
 
-PersistentConfig config{};
+static PersistentConfig config{};
 
-static void config_migrate(PersistentConfig &stored);
+static void migrate(PersistentConfig &stored);
 
 /**
  * PersistentConfig as it was laid out at CONFIG_VERSION 1.
@@ -62,7 +63,7 @@ PersistentConfig defaults()
  * Byte sum over a config image with the crc field zeroed.
  *
  * Templated so a stored image from an older CONFIG_VERSION can be validated
- * with the same rule before its fields are trusted by config_migrate().
+ * with the same rule before its fields are trusted by migrate().
  * Takes its argument by value: the copy is what gets its crc zeroed.
  */
 template <typename ConfigT>
@@ -78,10 +79,10 @@ static uint16_t checksum(ConfigT image)
     return sum;
 }
 
-void config_save()
+void save()
 {
     // If drone is inflight do run blocking save to EEPROM.
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         return;
     }
@@ -92,7 +93,7 @@ void config_save()
     EEPROM.put(EEPROM_ADDRESS, config);
 }
 
-void config_load()
+void load()
 {
     PersistentConfig stored{};
     EEPROM.get(EEPROM_ADDRESS, stored);
@@ -108,34 +109,30 @@ void config_load()
     }
     else if (stored.version != CONFIG_VERSION)
     {
-        config_migrate(stored);
+        migrate(stored);
     }
     else
     {
         // If values are unrecoverable reset to defaults.
         config = defaults();
-        config_save();
+        Configs::save();
     }
 }
 
-const PersistentConfig &config_get()
-{
-
+const PersistentConfig &get() {
     return config;
 }
 
-PersistentConfig &config_mutableGet()
-{
+PersistentConfig &mutableGet() {
     return config;
 }
 
-void restoreDefaults()
-{
+void restoreDefaults() {
     config = defaults();
-    config_save();
+    Configs::save();
 }
 
-static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
+static ConfigResult apply(ConfigKey key, int32_t value, bool &changed)
 {
     switch (key)
     {
@@ -209,31 +206,30 @@ static ConfigResult config_apply(ConfigKey key, int32_t value, bool &changed)
     return ConfigResult::OK;
 }
 
-ConfigResult config_set(ConfigKey key, int32_t value)
-{
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+ConfigResult set(ConfigKey key, int32_t value) {
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         return ConfigResult::UNSAFE_STATE;
     }
 
     bool changed = false;
-    const ConfigResult result = config_apply(key, value, changed);
+    const ConfigResult result = apply(key, value, changed);
 
     if (changed)
     {
-        config_save();
+        Configs::save();
     }
 
     return result;
 }
 
-void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
+void setBatch(const ConfigUpdate *updates, ConfigResult *results,
                       uint8_t count)
 {
     if (updates == nullptr)
         return;
 
-    if (Drone::state == Drone::DroneStates::FLIGHT)
+    if (Drone::getState() == Drone::States::FLIGHT)
     {
         for (uint8_t i = 0; i < count; ++i)
         {
@@ -247,7 +243,7 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
     for (uint8_t i = 0; i < count; ++i)
     {
         bool changed = false;
-        const ConfigResult result = config_apply(updates[i].key,
+        const ConfigResult result = apply(updates[i].key,
                                                  updates[i].value, changed);
         if (results != nullptr)
             results[i] = result;
@@ -255,10 +251,10 @@ void config_set_batch(const ConfigUpdate *updates, ConfigResult *results,
     }
 
     if (anyChanged)
-        config_save();
+        Configs::save();
 }
 
-int32_t config_read(ConfigKey key, ConfigResult &status)
+int32_t read(ConfigKey key, ConfigResult &status)
 {
     status = ConfigResult::OK;
     switch (key)
@@ -297,7 +293,7 @@ int32_t config_read(ConfigKey key, ConfigResult &status)
     return 0;
 }
 
-static void config_migrate(PersistentConfig &stored)
+static void migrate(PersistentConfig &stored)
 {
     switch (stored.version)
     {
@@ -345,5 +341,7 @@ static void config_migrate(PersistentConfig &stored)
 
     config = stored;
     // Save migrated configs
-    config_save();
+    Configs::save();
 }
+
+} // namespace Configs

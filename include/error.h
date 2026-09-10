@@ -1,43 +1,41 @@
-#pragma once
+// #pragma once
 
-#include "Arduino.h"
-#include "circular_buffer.h"
+// #include "Arduino.h"
+// #include "circular_buffer.h"
 
-/**
- * This class will be used to define the different errors that could occur.
- * At the time of writing errors will be shown on the builtin led and send 
- * by radio. 
- */
-class ErrorHandler {
-    /**
-     * A inner class of ErrorHanlder
-     * Will define what an actual error is.
-     */
-    class Error {
-        public:
-        short code;
-        using ErrorSeverity = char;
-        /**
-         * Severity level of the error. 
-         * 
-         * 0 = Low
-         * 1 = Medium
-         * 2 = High
-         * 3 = Critical / fatal
-         */
-        ErrorSeverity severity; 
-    };
+// /**
+//  * This namespace will be used to define the different errors that could occur.
+//  * At the time of writing errors will be shown on the builtin led and send 
+//  * by radio. 
+//  */
+// namespace ErrorHandler {
+//     /**
+//      * A inner class of ErrorHanlder
+//      * Will define what an actual error is.
+//      */
+//     namespace Error {
+        
+//         short code;
+//         using ErrorSeverity = char;
+//         /**
+//          * Severity level of the error. 
+//          * 
+//          * 0 = Low
+//          * 1 = Medium
+//          * 2 = High
+//          * 3 = Critical / fatal
+//          */
+//         ErrorSeverity severity; 
+//     };
     
-    public:
-        static constexpr Error radioInitFail{1, 1};        
-        static constexpr Error radioFreqSetFail{2, 1};
+//     // constexpr Error radioInitFail{1, 1};        
+//     // constexpr Error radioFreqSetFail{2, 1};
 
-        static void addError(Error error);
-        static bool hasError();
-        static void serialOut();
-  
-    private:
-        static Circular_Buffer<Error, 256> errorBuffer;
-        static bool serialConn;
+//     // void addError(Error error);
+//     // bool hasError();
+//     // void serialOut();
 
-};
+//     // static Circular_Buffer<Error, 256> errorBuffer;
+//     // static bool serialConn;
+
+// };

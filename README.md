@@ -41,6 +41,10 @@ The `Drone` class coordinates the individual subsystems and tracks the overall s
 For the binary USB and RFM69 endpoint reference used by dashboard clients, see
 [Dashboard Protocol Reference](docs/dashboard-protocol.md).
 
+Before contributing code, read the [Code Conventions](docs/code-conventions.md).
+It covers the module pattern, state ownership, the real-time constraints on the
+control loop, wire-format rules, and step-by-step recipes for common changes.
+
 ---
 
 ## System States
