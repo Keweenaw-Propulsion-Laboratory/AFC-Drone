@@ -6,6 +6,10 @@
 
 namespace Gimbal {
 
+// Servo GPIO pins
+static constexpr int PITCH_SERVO_PIN = 24;
+static constexpr int YAW_SERVO_PIN = 25;
+
 // Degrees. Some difference in these is normal to account for tooth placement.
 static constexpr int PITCH_ZERO = 90;
 static constexpr int YAW_ZERO = 89;
@@ -20,6 +24,13 @@ static float currentPitch = 0.0f;
 static float currentYaw = 0.0f;
 
 // MARK: Lookup table for gimbal correction
+
+// Extents of the servo lookup tables, which are transcribed straight from
+// docs/ServoLookupTable.csv. That sheet is laid out one ROW per yaw setpoint
+// and one COLUMN per pitch setpoint, so the maps are indexed [yaw][pitch].
+static constexpr int YAW_ROWS = 9;
+static constexpr int PITCH_COLS = 9;
+
 
 static constexpr float pitchValues[PITCH_COLS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
 static constexpr float yawValues[YAW_ROWS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};

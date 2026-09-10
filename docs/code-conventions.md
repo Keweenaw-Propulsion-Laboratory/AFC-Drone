@@ -217,6 +217,74 @@ because a module's internals live in exactly one `.cpp` you can read top to
 bottom — but if you are hunting every use of something, search the header for
 the declaration rather than grepping for call sites.
 
+### Reopen the namespace in the `.cpp`; never `using namespace`
+
+The `.cpp` must wrap its contents in `namespace Radio { ... }`, the same way the
+header does. Do **not** write `using namespace Radio;` at the top and then
+define things unqualified. This is not a style preference — the two do
+completely different things, and the second one is silently wrong.
+
+A using-directive only makes existing names *visible*. It does not let you
+*define* anything in the namespace. So this:
+
+```cpp
+// radio.h
+namespace Radio { void update(); }
+
+// radio.cpp
+#include "radio.h"
+using namespace Radio;
+
+void update() { }        // defines ::update, NOT Radio::update
+```
+
+...compiles cleanly under `-Wall -Werror` — nothing is wrong yet, since you are
+allowed to declare a global function called `update`. `nm` on the object file
+shows `T update()`, not `T Radio::update()`. `Radio::update` is now declared and
+never defined, and you find out at **link** time, from an error that points at
+some unrelated caller:
+
+```
+undefined reference to `Radio::update()'
+```
+
+This is exactly the failure this codebase hit during the namespace migration.
+Reopening the namespace properly buys three things:
+
+1. **The symbol always lands in the namespace.** When you slip, the mistake
+   stays scoped instead of leaking a global symbol that is free to collide with
+   anything else at link time — the same hazard as the unprefixed, non-`static`
+   `defaults()` described above.
+
+2. **Mismatches against the header become compile errors, in the right file.**
+   Given `bool setup();` and `extern int counter;` in the header, definitions
+   inside `namespace Radio { }` that get the return type or the variable type
+   wrong fail immediately:
+
+   ```
+   error: ambiguating new declaration of 'void Radio::setup()'
+   error: conflicting declaration 'float Radio::counter'
+   ```
+
+   The identical two mistakes under `using namespace Radio;` compile with exit
+   code 0 and quietly emit global `::setup` and `::counter`.
+
+   The limit: this catches differences that are not *overloadable* — return
+   type, variable type, `const`ness. A parameter-type slip (`set(int)` where the
+   header says `set(float)`) is a legal overload, so it still compiles and you
+   still get a link error at the call site. Better than a stray global, but not
+   caught at the definition.
+
+3. **The file reads as the module's implementation.** Opening
+   `namespace USB {` right after the includes — see
+   [usb.cpp:17](../src/usb.cpp#L17) — says plainly "everything below is USB,"
+   and the module's private helpers are scoped without anyone having to
+   remember a prefix.
+
+`using namespace` is fine in the narrow, local sense it was designed for — a
+`using namespace std::chrono_literals;` inside a function body, say. It is never
+the way to implement a module.
+
 ### Why not real objects
 
 Making `Gimbal` a class you instantiate (`Gimbal gimbal;`) would add a level of

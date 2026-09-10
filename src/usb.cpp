@@ -16,6 +16,10 @@ between the Drone and a pysically connected Serial terminal
 
 namespace USB {
 
+// Wire format: 0xA5 0x5A, version, packetNum (little-endian), type, length,
+// payload, CRC-16/CCITT-FALSE (little-endian). CRC excludes the sync bytes.
+constexpr uint8_t USB_PROTOCOL_VERSION = 1;
+
 static constexpr uint8_t MAX_DATA_LEN = 60; /** Max usb data length */
 static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
