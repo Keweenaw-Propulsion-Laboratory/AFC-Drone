@@ -1,8 +1,18 @@
 ## Description
-- **Notion Task:** [Paste link here]
-- **Summary of Changes:** ## Hardware Impact
+### Notion Task(s): 
+  - [Task Name](link)
+### Summary of Changes: 
+1. 
+
+## Breaking Changes
+1. 
+
+## Hardware Impact
 - [ ] **Pin Changes:** Does this change any digital/analog pin assignments?
+
+
 - [ ] **Power/Current:** Any changes to PWM frequencies or high-draw components?
+
 - [ ] **Timing:** Any changes to `delay()`, `intervals`, or interrupt service routines?
 
 ## Testing Checklist
