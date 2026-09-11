@@ -1,21 +1,6 @@
-
-/**
- * Development Notes
- * Show Voltage
- * The battery is a standard 4s Lipo battery, 
- * which has a nominal voltage of 14.8V and a maximum voltage of 16.8V when fully charged. 
- * The battery voltage can be measured using an analog input pin on the microcontroller. 
- * The voltage reading can be converted to a percentage to indicate the remaining battery life.
- * 
- * Set lowest voltage to 15.0V, and highest voltage to 16.8V, and then map the current voltage to a percentage between 0% and 100%.
- * pull the current voltage from the battery and save that value,
- * Show percent
- * Static Allocation, compiler tells how much memory you need
- * extern uint8_t motor_topSetSpeed;
-extern uint8_t motor_bottomSetSpeed;
- */
 #pragma once
 
+#include <cstdint>
 
 namespace Battery {
     
