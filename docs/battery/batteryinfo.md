@@ -9,7 +9,7 @@ This document outlines the logic, parameters, and variable references required t
 The system monitors a standard **4S LiPo battery** configured with custom safe-operating thresholds for capacity mapping to preserve cycle life.
 
 * **Nominal Voltage:** 14.8V (3.7V per cell)
-* **Maximum Voltage (100%):** 16.8V (4.2V per cell)
+* **Maximum Voltage (100%):** 16.5V (4.2V per cell)
 * **Safe Discharge / Empty Limit (0%):** 14.0V (3.5V per cell)
 
 ### Capacity Mapping Reference Table
