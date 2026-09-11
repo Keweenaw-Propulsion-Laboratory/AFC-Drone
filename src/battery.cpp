@@ -16,8 +16,8 @@ void setup() {
 }
 
 // Get the current voltage of the battery *Mainly copied from ArduinoDocs for analogRead()*
-constexpr float V_REF = 3.3;     // Analog reference voltage (e.g., 5V or 3.3V)
-constexpr float R_BITS = 12.0;   // ADC resolution (bits)
+static constexpr float V_REF = 16.5;     // Analog reference voltage (e.g., 5V or 3.3V)
+static constexpr float R_BITS = 12.0;   // ADC resolution (bits)
 constexpr float ADC_STEPS = (1 << int(R_BITS)) - 1; // Number of steps (2^R_BITS - 1)
 
 float getVoltage() {
