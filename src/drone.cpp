@@ -9,6 +9,9 @@
 static constexpr int CONTROL_LOOP_HZ = 1000;
 static constexpr int CONTROL_LOOP_US = (1000000 / CONTROL_LOOP_HZ);
 
+/** Time the watchdog is allowed to be missed in milliseconds */
+static constexpr uint16_t COMM_WATCHDOG_SAFETY_MS = 100;
+
 // Higher priority (lower number) than the default (128) so the control tick
 // isn't delayed behind lower-priority peripheral interrupts.
 static constexpr uint8_t CONTROL_TIMER_PRIORITY = 64;
@@ -371,5 +374,21 @@ void update() {
 
     recordTelemetry();
 }
+
+elapsedMillis flightWatchdog;
+
+// Checks if the watchdog timmer has expired. 
+bool getFlightWatchdogStatus() {
+    if (flightWatchdog - COMM_WATCHDOG_SAFETY_MS >= 0){
+        return true;
+    } 
+    return false;
+}
+
+// Sets the time since last seen to 0. 
+void feedFlightWatchdog() {
+    flightWatchdog = 0;
+}
+
 
 } // namespace Drone

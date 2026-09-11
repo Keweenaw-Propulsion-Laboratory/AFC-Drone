@@ -2,6 +2,7 @@
 #include "Arduino.h"
 #include "Servo.h"
 #include "configs.h"
+#include "drone.h"
 
 namespace Motor {
 
@@ -68,9 +69,13 @@ void setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
         topSpeed = ESC_MIN_US;
     }
 
-
-    bottomMotor.writeMicroseconds(bottomSpeed);
-    topMotor.writeMicroseconds(topSpeed);
+    if (Drone::getFlightWatchdogStatus()) {
+        bottomMotor.writeMicroseconds(bottomSpeed);
+        topMotor.writeMicroseconds(topSpeed);
+    } else {
+        bottomMotor.writeMicroseconds(ESC_MIN_US);
+        topMotor.writeMicroseconds(ESC_MIN_US);
+    }
 }
 
 } // namespace Motor

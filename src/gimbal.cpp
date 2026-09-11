@@ -1,7 +1,9 @@
 #include "gimbal.h"
 
-#include "Servo.h"
 #include "configs.h"
+#include "drone.h"
+
+#include "Servo.h"
 #include "Arduino.h"
 
 namespace Gimbal {
@@ -80,6 +82,11 @@ void setup() {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setTopServo(float angle) {
+    // Check if the watchdog has expired. 
+    if (!Drone::getFlightWatchdogStatus()){
+        return;
+    }
+
     topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
 
     pitchServo.write(topServo);   
@@ -91,6 +98,11 @@ void setTopServo(float angle) {
  * @param angle The number of degrees. Positive moves servo throw arm up.
  */
 void setBotServo(float angle) {
+    // Check if the watchdog has expired. 
+    if (!Drone::getFlightWatchdogStatus()){
+        return;
+    }
+
     bottomServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
     yawServo.write(bottomServo);
 }

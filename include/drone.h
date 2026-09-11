@@ -111,5 +111,23 @@ namespace Drone {
      */
      void update();
 
+    /**
+     * @brief Checks the status of the flight watchdog timmer.
+     * 
+     * If the watchdog has expired then movement is assumed to be prohibited.
+     * All physical mechanisms on the vehicle should use this gaurd to 
+     * prevent unauthorized movement in the case of a communication failure. 
+     * 
+     * @returns Will return true if the watchdog is still alive.
+     * Will return false if the watchdog has expired. 
+     */
+    bool getFlightWatchdogStatus();
+
+    /**
+     * Feeds the flight watchdog
+     * 
+     * @related bool getFlightWatchdogStatus()
+     */
+    void feedFlightWatchdog();
 
 };
