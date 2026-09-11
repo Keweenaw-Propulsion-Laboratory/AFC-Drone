@@ -18,7 +18,7 @@ void setup() {
 // Get the current voltage of the battery *Mainly copied from ArduinoDocs for analogRead()*
 static constexpr float V_REF = 16.5;     // Analog reference voltage (e.g., 5V or 3.3V)
 static constexpr float R_BITS = 12.0;   // ADC resolution (bits)
-constexpr float ADC_STEPS = (1 << int(R_BITS)) - 1; // Number of steps (2^R_BITS - 1)
+static constexpr float ADC_STEPS = (1 << int(R_BITS)) - 1; // Number of steps (2^R_BITS - 1)
 
 float getVoltage() {
     int rawValue = analogRead(BATTERY_PIN); // Read the analog input
@@ -26,9 +26,9 @@ float getVoltage() {
     return voltage;
 }
 
-constexpr float minVoltage = 13.09; // Minimum voltage for 4S LiPo, based on chart
-constexpr float maxVoltage = 16.5; // Maximum voltage for 4S LiPo, got from charging our battery to full
-constexpr float nominalVoltage = 14.8; // Nominal voltage for 4S LiPo, mostly for reference, not used in calculation
+static constexpr float minVoltage = 13.09; // Minimum voltage for 4S LiPo, based on chart
+static constexpr float maxVoltage = 16.5; // Maximum voltage for 4S LiPo, got from charging our battery to full
+static constexpr float nominalVoltage = 14.8; // Nominal voltage for 4S LiPo, mostly for reference, not used in calculation
 
 float getVoltPercent() {
     float voltage = getVoltage();
