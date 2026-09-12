@@ -2,15 +2,19 @@
 
 #include <cstdint>
 
-extern uint16_t motor_topSetSpeed;
-extern uint16_t motor_bottomSetSpeed;
+namespace Motor {
+
+uint16_t getBottomSpeed();
+uint16_t getTopSpeed();
+
 
 /** 
- * Sets up required reasources
+ * Sets up required resources
  */
-void motor_setup();
+void setup();
 
 /**
  * Sets the output from 0.0 (stopped) to 1.0 (Full speed)
  */
-void motor_setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed);
+void setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed);
+}

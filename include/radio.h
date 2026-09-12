@@ -2,15 +2,13 @@
 
 #include "RH_RF69.h"
 #include "configs.h"
+#include "drone.h"
 
-#define RF69_FREQ 915.0
+namespace Radio {
 
-constexpr int RFM69_CS = 10;  //
-constexpr int RFM69_INT = 40; //
-constexpr int RFM69_RST = 41;  // "A"
-constexpr int LED = 13;
 
-extern int16_t radio_avgRSSI;
+    /** Rolling average RSSI of received packets, in dBm. */
+    int16_t getAvgRSSI();
 
 
         /**
@@ -20,7 +18,7 @@ extern int16_t radio_avgRSSI;
         * local hardware only, so it either completes in a few milliseconds or
         * fails outright - it can never stall waiting on another vehicle.
         */
-        enum class radio_SetupStates : uint8_t{
+        enum class SetupStates : uint8_t{
             RESET1,
             RESET2,
             RADIO_INIT,
@@ -31,36 +29,36 @@ extern int16_t radio_avgRSSI;
         /**
         * Stage 2 of radio bring-up: finding the base station.
         *
-        * This runs in the background from radio_update() and is deliberately
-        * NOT part of radio_setupComplete(). Losing or never finding the base
+        * This runs in the background from update() and is deliberately
+        * NOT part of Radio::setupComplete(). Losing or never finding the base
         * station must not keep the vehicle from arming, so the drone reaches
         * READY_ARMED regardless of what this reports.
         */
-        enum class radio_LinkStates : uint8_t{
+        enum class LinkStates : uint8_t{
             DISCONNECTED, // No ping outstanding; next poll will send one
             AWAITING_ACK, // Ping sent, waiting for the base station to answer
             CONNECTED     // Base station has acknowledged
         };
 
-        bool radio_setup();
+        bool setup();
 
         /**
          * True once the RFM69 is configured and able to send and receive.
-         * Does NOT imply a base station is listening - see radio_linkConnected().
+         * Does NOT imply a base station is listening - see linkConnected().
          */
-        bool radio_setupComplete();
+        bool setupComplete();
 
         /** True once the base station has acknowledged our connection ping. */
-        bool radio_linkConnected();
+        bool linkConnected();
 
-        enum class RadioStates : uint8_t{
+        enum class TransceiverStates : uint8_t{
             HARDWARE_INIT,
             TRANSMIT,
             RECV,
             READY
         };
 
-        struct __attribute__((packed)) radio_Header {
+        struct __attribute__((packed)) PacketHeader {
             uint8_t msgNum;
             uint8_t packetType;
         };
@@ -85,8 +83,8 @@ extern int16_t radio_avgRSSI;
 
 
         struct __attribute__((packed)) StatusMsg2_t {
-            uint16_t motor1set; // Motor 1 set point
-            uint16_t motor2set; // Motor 2 set point
+            uint16_t bottomMotorSet; // Motor 1 set point
+            uint16_t topMotorSet; // Motor 2 set point
             uint16_t voltage; // Current voltage of the battery. 
             uint16_t rssi; // The strength of the radio connection
         };
@@ -132,21 +130,35 @@ extern int16_t radio_avgRSSI;
             } flags;
             int16_t gimbalX;
             int16_t gimbalY;
-            uint8_t motor0Speed;
-            uint8_t motor1Speed;
+            uint8_t bottomMotor;
+            uint8_t topMotor;
             uint8_t empty0; // Unused command field
 
         };
 
         struct __attribute__((packed)) ConfigPacket{
             uint8_t version;
-            ConfigState state;
-            ConfigKey configKey;
+            Configs::ConfigState state;
+            Configs::ConfigKey configKey;
             uint32_t value;
         };
 
-        // uinion all of the radio messages for type safety
-        union radio_Message {
+        // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything
+        // that changes one of these silently breaks every ground-station and
+        // dashboard client parsing it. See docs/code-conventions.md section 9.
+        static_assert(sizeof(StatusMsg0_t) == 8, "StatusMsg0_t wire size changed");
+        static_assert(sizeof(StatusMsg1_t) == 8, "StatusMsg1_t wire size changed");
+        static_assert(sizeof(StatusMsg2_t) == 8, "StatusMsg2_t wire size changed");
+        static_assert(sizeof(StatusMsg3_t) == 8, "StatusMsg3_t wire size changed");
+        static_assert(sizeof(StatusMsg4_t) == 8, "StatusMsg4_t wire size changed");
+        static_assert(sizeof(StatusMsg5_t) == 8, "StatusMsg5_t wire size changed");
+        static_assert(sizeof(StatusMsg6_t) == 8, "StatusMsg6_t wire size changed");
+        static_assert(sizeof(StatusMsg7_t) == 8, "StatusMsg7_t wire size changed");
+        static_assert(sizeof(Command_t) == 8, "Command_t wire size changed");
+        static_assert(sizeof(ConfigPacket) == 8, "ConfigPacket wire size changed");
+
+        // union all of the radio messages for type safety
+        union Message {
             uint64_t raw;
             StatusMsg0_t status0;
             StatusMsg1_t status1;
@@ -163,10 +175,10 @@ extern int16_t radio_avgRSSI;
         };
     
         // Ensure that all messages are 8 bytes
-        static_assert(sizeof(radio_Message) == sizeof(uint64_t), "Radio messages must be 8 bytes");
+        static_assert(sizeof(Message) == sizeof(uint64_t), "Radio messages must be 8 bytes");
         
         // MARK: Message structure
-        enum class radio_MessageType : uint8_t {
+        enum class MessageType : uint8_t {
             SETUP = 0,
             STATUS0 = 1,
             STATUS1 = 2,
@@ -180,49 +192,60 @@ extern int16_t radio_avgRSSI;
 
         };
 
-    struct __attribute__((packed)) radio_Packet {
-        radio_Message message;
-        radio_MessageType type;
+    struct __attribute__((packed)) DataPacket {
+        Message message;
+        MessageType type;
 
         // 1. Constructor allowing implicit conversion from '0' (fixes the Circular_Buffer fallback)
-        radio_Packet(int = 0) 
-            : message{0}, type(radio_MessageType::SETUP) {}
+        DataPacket(int = 0) 
+            : message{0}, type(MessageType::SETUP) {}
 
         // 2. Multi-argument constructor for initializing packets cleanly
-        radio_Packet(radio_Message msg, radio_MessageType t) 
+        DataPacket(Message msg, MessageType t) 
             : message(msg), type(t) {}
     };
 
-        // Fixed-point scale factors for packing Gyro floats into int16 status fields.
-        constexpr float RADIO_QUAT_SCALE = 32767.0f;  // Quaternion components are unit range [-1, 1]
-        constexpr float RADIO_ACCEL_SCALE = 1000.0f;  // m/s^2 -> mm/s^2
-        constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
-        constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
+    // Fixed-point scale factors for packing Gyro floats into int16 status fields.
+    constexpr float RADIO_QUAT_SCALE = 32767.0f;  // Quaternion components are unit range [-1, 1]
+    constexpr float RADIO_ACCEL_SCALE = 1000.0f;  // m/s^2 -> mm/s^2
+    constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
+    constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
 
-        inline int16_t radio_floatToFixed(float value, float scale) {
-            float scaled = value * scale;
-            if (scaled > 32767.0f) scaled = 32767.0f;
-            if (scaled < -32768.0f) scaled = -32768.0f;
-            return static_cast<int16_t>(scaled);
-        }
+    inline int16_t floatToFixed(float value, float scale) {
+        float scaled = value * scale;
+        if (scaled > 32767.0f) scaled = 32767.0f;
+        if (scaled < -32768.0f) scaled = -32768.0f;
+        return static_cast<int16_t>(scaled);
+    }
 
-        void radio_sendStatus0();
-        void radio_sendStatus1();
-        void radio_sendStatus2();
-        void radio_sendStatus3();
-        void radio_sendStatus4();
-        void radio_sendStatus5();
-        void radio_sendStatus6();
-        
+    /**
+     * Status packet senders. Each takes the telemetry snapshot recorded by the
+     * control ISR rather than reading the live subsystems, so every packet in
+     * one telemetry frame describes the same instant.
+     *
+     * Values the control tick cannot see - radio RSSI, battery voltage, GPS -
+     * are still read live here, because they are owned by loop() context.
+     */
+    void sendStatus0(const Drone::Telemetry_t& t);
+    void sendStatus1(const Drone::Telemetry_t& t);
+    void sendStatus2(const Drone::Telemetry_t& t);
+    void sendStatus3(const Drone::Telemetry_t& t);
+    void sendStatus4(const Drone::Telemetry_t& t);
+    void sendStatus5(const Drone::Telemetry_t& t);
+    void sendStatus6(const Drone::Telemetry_t& t);
+    
 
-        /**
-         * All of the tasks that the radio needs to do during the periodic loop
-         */
-        void radio_update();
-        
+    /**
+     * All of the tasks that the radio needs to do during the periodic loop
+     */
+    void update();
+    
+    //MARK: ACK
+
     union ACK {
         uint8_t array[8];
         uint64_t raw;
     };
 
     inline constexpr ACK ack = {0x69,0x69,0x69,0x69,0x69,0x69,0x69,0x69};
+}
