@@ -2,15 +2,9 @@
 
 #include <Adafruit_BNO08x.h>
 
-#define GYRO_RESET -1
+constexpr int GYRO_RESET = -1;
 
-class Gyro{
-    public: 
-    struct euler_t {
-        float yaw;
-        float pitch;
-        float roll;
-    };
+namespace Gyro {
 
     struct state_t {
         double x;
@@ -25,61 +19,33 @@ class Gyro{
         state_t position; // World-frame position (z = vertical)
 
     };
-    
-    static euler_t ypr;
-    static DroneState droneState;
-    static uint32_t lastCheck;
 
-    // Latest orientation quaternion in the raw BNO08x sensor frame (real, i, j, k), updated in update()
-    static float quatReal;
-    static float quatI;
-    static float quatJ;
-    static float quatK;
+    bool setup();
+    bool setupComplete();
 
-    // Same orientation quaternion remapped into the drone's own body frame
-    // (see the mounting remap comment in update()). This is what telemetry
-    // consumers should use to report vehicle attitude.
-    static float droneQuatReal;
-    static float droneQuatI;
-    static float droneQuatJ;
-    static float droneQuatK;
+    void update();
 
-    static float worldAccelX;
-    static float worldAccelY;
-    static float worldAccelZ;
+    float getPitch();
+    float getYaw();
+    float getRoll();
 
-    // Functions
-    static bool setup();
-    static bool setupComplete();
+    /**
+     * Orientation quaternion remapped into the drone's own body frame (see the
+     * mounting remap comment in update()). This is what telemetry consumers
+     * should use to report vehicle attitude; the raw BNO08x sensor-frame
+     * quaternion stays private to gyro.cpp.
+     */
+    float getQuatReal();
+    float getQuatI();
+    float getQuatJ();
+    float getQuatK();
 
-    static void update();
+    /** World-frame linear acceleration, in m/s^2. */
+    float getWorldAccelX();
+    float getWorldAccelY();
+    float getWorldAccelZ();
 
-    static float getPitch();
-    static float getYaw();
-    static float getRoll();
+    /** Dead-reckoned world-frame velocity and position. */
+    const DroneState& getDroneState();
 
-    static void updateDeadReckoning(float wX, float wY, float wZ);
-
-    // Helpers
-    static void quaternionToEuler(float qr, float qi, float qj, float qk, bool degrees = false);
-    static void quaternionToEulerRV(sh2_RotationVectorWAcc_t* rotational_vector, bool degrees = false);
-    static void quaternionToEulerGI(sh2_GyroIntegratedRV_t* rotational_vector, bool degrees = false);
-
-    static void transformToWorldFrame(float qW, float qX, float qY, float qZ, float ax, float ay, float az, 
-                           float& worldX, float& worldY, float& worldZ);
-
-    static void debug();
-
-    static Adafruit_BNO08x gyro;
-    static sh2_SensorValue_t sensorValue;
-
-    private: 
-
-        enum GyroSetupStates : uint8_t {
-            I2C,
-            EnableReport,
-            Complete
-        };
-
-        static GyroSetupStates state;
-};
+}

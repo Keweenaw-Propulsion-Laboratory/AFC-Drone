@@ -4,32 +4,102 @@
 #include "configs.h"
 #include "Arduino.h"
 
+namespace Gimbal {
 
-#define PITCH_ZERO 90 // Degrees. Some difference in these is normal to account for tooth placement. 
-#define YAW_ZERO 89 // Degrees. Some difference in these is normal to account for tooth placement
+// Servo GPIO pins
+static constexpr int PITCH_SERVO_PIN = 24;
+static constexpr int YAW_SERVO_PIN = 25;
 
-Servo Gimbal::pitchServo;
-Servo Gimbal::yawServo;
+// Degrees. Some difference in these is normal to account for tooth placement.
+static constexpr int PITCH_ZERO = 90;
+static constexpr int YAW_ZERO = 89;
 
-float gimbal_botServo = 0.0f;
-float gimbal_topServo = 0.0f;
+static Servo pitchServo;
+static Servo yawServo;
 
-float gimbal_pitch = 0.0f;
-float gimbal_yaw = 0.0f;
+static float bottomServo = 0.0f;
+static float topServo = 0.0f;
+
+static float currentPitch = 0.0f;
+static float currentYaw = 0.0f;
+
+// MARK: Lookup table for gimbal correction
+
+// Extents of the servo lookup tables, which are transcribed straight from
+// docs/ServoLookupTable.csv. That sheet is laid out one ROW per yaw setpoint
+// and one COLUMN per pitch setpoint, so the maps are indexed [yaw][pitch].
+static constexpr int YAW_ROWS = 9;
+static constexpr int PITCH_COLS = 9;
 
 
+static constexpr float pitchValues[PITCH_COLS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
+static constexpr float yawValues[YAW_ROWS] = {-20.0, -15.0, -10.0, -5.0, 0.0, 5.0, 10.0, 15.0, 20.0};
 
+static constexpr float topServoMap[YAW_ROWS][PITCH_COLS] = {
+    {-1.306221,     5.164407,   11.298533,  17.210218,  23.018482,  16.95216,   11.170965,  5.554293,   0},
+    {-6.744026,     -0.423434,  5.579505,   11.3642,    16.95216,   11.3642,    5.711151,   -0.155048,  -5.272502},
+    {-12.11768,     -5.909759,  0,          5.711151,   11.170965,  5.512334,   0,          -5.711151,  -10.928924},
+    {-17.492678,    -11.368308, -5.512334,  0.155048,   5.541829,   -0.155048,  -5.711151,  -11.3642,   -16.753008},
+    {-23.018482,    -16.753008, -10.928924, -5.272502,  0,          5.272502,   10.928924,   16.753008,   23.018482},
+    {-16.753008,    -11.3642,   -5.711151,  -0.155048,  -5.554293,  -0.155048,  5.512334,   11.368308,   17.492678},
+    {-11.170965,    -5.711151,  0,          5.512334,  -11.170965,  -5.711151,   0,           5.909759,    12.11768},
+    {-5.554293,     0.155048,   5.711151,   11.3642,    -16.95216,  -11.3642,   -5.579505,  0.423434,   6.744026},
+    {0,             5.554293,   11.170965,  16.95216,   -23.018482, -17.210218, -11.298533, -5.164407,  1.306221}
+};
 
-void Gimbal::setup() {
+static constexpr float bottomServoMap[YAW_ROWS][PITCH_COLS] = {
+    {-42.129333,    -36.747015, -31.198556,-25.576657,-20.467741,-15.836313,-10.753458,-5.420747,0},
+    {-37.334843,    -32.062079, -26.586062,-21.008485,-15.836313,-21.008485,-15.937261,-10.598426,-5.498094},
+    {-31.979404,    -26.824999, -21.443005,-15.937261,-10.753458,-21.443005,-21.443005,-15.937261,-10.949558},
+    {-26.390838,    -21.336456, -16.038791,-10.598426,-5.420747,-10.598426,-15.937261,-21.008485,-16.268496},
+    {-21.364376,    -16.268496, -10.949558,-5.498094,0,5.498094,10.949558,16.268496,21.364376},
+    {-16.268496,    -21.008485, -15.937261,-10.598426,5.420747,10.598426,16.038791,21.336456,26.390838},
+    {-10.949558,    -15.937261, -21.443005,-21.443005,10.753458,15.937261,21.443005,26.824999,31.979404},
+    {-5.498094,     -10.598426, -15.937261,-21.008485,15.836313,21.008485,26.586062,32.062079,37.334843},
+    {0,-5.420747,   -10.753458, -15.836313,20.467741,25.576657,31.198556,36.747015,42.129333}
+};
+
+int limitRange(int val, int low, int high){
+    if(val > high) {
+        val = high;
+    } else if (val < low) {
+        val = low;
+    }
+
+    return val;
+}
+
+void setup() {
     pitchServo.attach(PITCH_SERVO_PIN);
     yawServo.attach(YAW_SERVO_PIN);
 }
 
-void Gimbal::set(float pitch, float yaw) {
+/**
+ * Sets the pitch servo to the number of degrees off of zero.
+ * 
+ * @param angle The number of degrees. Positive moves servo throw arm up.
+ */
+void setTopServo(float angle) {
+    topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
+
+    pitchServo.write(topServo);   
+}
+
+/**
+ * Sets the yaw servo to the number of degrees off of zero.
+ * 
+ * @param angle The number of degrees. Positive moves servo throw arm up.
+ */
+void setBotServo(float angle) {
+    bottomServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
+    yawServo.write(bottomServo);
+}
+
+void set(float pitch, float yaw) {
 
     // Update set points
-    gimbal_pitch = pitch;
-    gimbal_yaw = yaw;
+    currentPitch = pitch;
+    currentYaw = yaw;
 
     // Bilinear Interpolation
     // https://en.wikipedia.org/wiki/Bilinear_interpolation
@@ -90,73 +160,43 @@ void Gimbal::set(float pitch, float yaw) {
 
 }
 
-
-
-/**
- * Sets the pitch servo to the number of degrees off of zero.
- * 
- * @param angle The number of degrees. Positive moves servo throw arm up.
- */
-void Gimbal::setTopServo(float angle) {
-    gimbal_topServo = limitRange(angle + config_get().gimbalPitchOffset, 60 , 120);
-
-    pitchServo.write(gimbal_topServo);   
-}
-
-/**
- * Sets the yaw servo to the number of degrees off of zero.
- * 
- * @param angle The number of degrees. Positive moves servo throw arm up.
- */
-void Gimbal::setBotServo(float angle) {
-    gimbal_botServo = limitRange( -angle + config_get().gimbalYawOffset, 60, 120);
-    yawServo.write(gimbal_botServo);
-}
-
-
-
-void Gimbal::zero() {
-    // Setting the servos to their mid point
+void zero() {
     set(0,0);
-    
 }
 
-void Gimbal::selfTest() {
-    // Test Servos independently 
-    // setTopServo(-30);
-    // delay(1000);
+void selfTest(bool lookup) {
+    if (lookup) {
+        set(-30, 0);
+        delay(1000);
+        set(0, -30);
+        delay(1000);
+        set(30, 0);
+        delay(1000);
+        set(0, 30);
+        delay(1000);
+    } else {    
+        // Test Servos independently 
+        setTopServo(-30);
+        delay(1000);
 
-    // setBotServo(-30);
-    // delay(1000);
+        setBotServo(-30);
+        delay(1000);
 
-    // setTopServo(30);
-    // delay(1000);
+        setTopServo(30);
+        delay(1000);
 
-    // setBotServo(30);
-    // delay(1000);
+        setBotServo(30);
+        delay(1000);
 
-    // setBotServo(0);
-    // setTopServo(0);
-    // delay(2000);
-    // // Test reference 
-
-    set(-30, 0);
-    delay(1000);
-    set(0, -30);
-    delay(1000);
-    set(30, 0);
-    delay(1000);
-    set(0, 30);
-    delay(1000);
-
+        setBotServo(0);
+        setTopServo(0);
+        delay(2000);
+    } 
 }
 
-int Gimbal::limitRange(int val, int low, int high){
-    if(val > high) {
-        val = high;
-    } else if (val < low) {
-        val = low;
-    }
+float getPitch() {return currentPitch;}
+float getYaw() {return currentYaw;}
+uint16_t getTopServo() {return topServo;}
+uint16_t getBottomServo() {return bottomServo;}
 
-    return val;
-}
+} // namespace Gimbal
