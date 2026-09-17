@@ -69,7 +69,9 @@ void setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
         topSpeed = ESC_MIN_US;
     }
 
-    if (Drone::getFlightWatchdogStatus()) {
+    // Only allow motor movement when watchdog is fed and state = flight
+    if (Drone::getFlightWatchdogStatus() && 
+        Drone::getState() == Drone::States::FLIGHT) {
         bottomMotor.writeMicroseconds(bottomSpeed);
         topMotor.writeMicroseconds(topSpeed);
     } else {

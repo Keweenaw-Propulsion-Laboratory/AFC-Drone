@@ -266,6 +266,10 @@ void update() {
                     handleConfig(msg);
                     break;
                 
+                case MessageType::HEARTBEAT :
+                    // Heatbeat packet was found. Feed watchdog. 
+                    Drone::feedFlightWatchdog();
+                
                 default:
                     break;
                 }

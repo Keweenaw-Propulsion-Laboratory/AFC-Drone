@@ -22,6 +22,7 @@ enum class MessageTypes : uint8_t {
     TELEMETRY = 3,
     COMMAND = 4,
     CONFIG = 5,
+    HEARTBEAT = 10, // Same as Radio
 };
 
 enum class RadioDirection : uint8_t {

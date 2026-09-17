@@ -130,4 +130,6 @@ namespace Drone {
      */
     void feedFlightWatchdog();
 
+    bool requestState();
+
 };

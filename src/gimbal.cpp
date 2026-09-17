@@ -83,13 +83,12 @@ void setup() {
  */
 void setTopServo(float angle) {
     // Check if the watchdog has expired. 
-    if (!Drone::getFlightWatchdogStatus()){
-        return;
-    }
 
     topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
 
-    pitchServo.write(topServo);   
+    if (Drone::getFlightWatchdogStatus() && Drone::getState() == Drone::States::FLIGHT){
+        pitchServo.write(topServo);   
+    }
 }
 
 /**
@@ -104,7 +103,11 @@ void setBotServo(float angle) {
     }
 
     bottomServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
-    yawServo.write(bottomServo);
+
+    if (Drone::getFlightWatchdogStatus() && Drone::getState() == Drone::States::FLIGHT){
+        yawServo.write(bottomServo);   
+    }
+    
 }
 
 void set(float pitch, float yaw) {

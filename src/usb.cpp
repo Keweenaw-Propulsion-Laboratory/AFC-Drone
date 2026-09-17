@@ -146,6 +146,7 @@ union __attribute__((packed)) Message {
     ConfigResponse configResponse;
     ConfigReadResponse configReadResponse;
     Radio::Message radio_message;
+    Radio::HeartbeatPacket heartbeat;
     
 };
 
@@ -359,6 +360,9 @@ void update() {
             handleConfig(pkt.data, pkt.header.packetLength);
 
             break;
+        
+        case MessageTypes::HEARTBEAT:
+            Drone::feedFlightWatchdog();
         
         default:
             break;

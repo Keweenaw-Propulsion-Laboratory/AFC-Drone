@@ -71,7 +71,7 @@ namespace Radio {
             uint16_t loopTimeMax; // Max loop time in micros
             uint16_t RunTime; // Time that the vehicle has been powered on in seconds
             uint8_t currentMode; // The current mode that the vehicle is in. 
-            uint8_t empty; // Reserved
+            uint8_t watchDog; // Is watchdog enabled
         };
 
         struct __attribute__((packed)) StatusMsg1_t {
@@ -143,6 +143,12 @@ namespace Radio {
             uint32_t value;
         };
 
+        struct __attribute__((packed)) HeartbeatPacket {
+            /**Requested state of the drone */
+            Drone::States state; 
+            uint64_t reserved : 56;
+        };
+
         // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything
         // that changes one of these silently breaks every ground-station and
         // dashboard client parsing it. See docs/code-conventions.md section 9.
@@ -156,6 +162,7 @@ namespace Radio {
         static_assert(sizeof(StatusMsg7_t) == 8, "StatusMsg7_t wire size changed");
         static_assert(sizeof(Command_t) == 8, "Command_t wire size changed");
         static_assert(sizeof(ConfigPacket) == 8, "ConfigPacket wire size changed");
+        static_assert(sizeof(HeartbeatPacket) == 8, "HeartbeatPacket wire size changed");
 
         // union all of the radio messages for type safety
         union Message {
@@ -169,9 +176,9 @@ namespace Radio {
             StatusMsg6_t status6;
             Command_t command;
             ConfigPacket config;
+            HeartbeatPacket heartbeat;
 
-            char textArray[8];
-            
+            char textArray[8];            
         };
     
         // Ensure that all messages are 8 bytes
@@ -189,6 +196,7 @@ namespace Radio {
             STATUS6 = 7,
             COMMAND = 8,
             CONFIG = 9,
+            HEARTBEAT = 10,
 
         };
 
