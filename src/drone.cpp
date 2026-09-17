@@ -5,6 +5,7 @@
 #include "gyro.h"
 #include "gimbal.h"
 #include "motor.h"
+#include "battery.h"
 
 static constexpr int CONTROL_LOOP_HZ = 1000;
 static constexpr int CONTROL_LOOP_US = (1000000 / CONTROL_LOOP_HZ);
@@ -222,6 +223,11 @@ bool startup() {
     case States::BOOT:
         // This state handles any internal initialization that the controller may need to do
         pinMode(STATUS_LED, OUTPUT);       
+        
+        if(!Battery::setup()) {
+            state = States::FAULT_ERROR;
+            USB::sendText("DRONE: SETUP FAILURE in stage BOOT -> BATTERY");
+        }
         
         // Transition to next state
         state = States::RADIO_SETUP;

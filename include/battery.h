@@ -3,7 +3,7 @@
 #include <cstdint>
 
 /** 
-* Battery monitering system
+* Battery Monitoring System
 */
 namespace Battery {
     
@@ -11,7 +11,12 @@ namespace Battery {
      * Set Teensy analog input pin
      * Set resolution to 12 bits
      */
-    void setup(); 
+    bool setup();
+
+    /**
+     * Read the battery and update its rolling voltage average.
+     */
+    void update();
 
     /** 
     * Get the current voltage of the battery
@@ -21,8 +26,10 @@ namespace Battery {
     /** 
     * Get the current percentage of the battery left
     * This is calculated based on a voltage range,
-    * In this case 13.09V to 16.5V for a 4S LiPo battery
-    * percent = (voltage - minVoltage) / (maxVoltage - minVoltage) * 100.0
+    * In this case 13.09V to 16.5V for a 4S LiPo battery.
+    * getBatteryState() reports FAULT_ERROR for readings more than 2.5% outside
+    * this range.
+    * percent = (voltage - MIN_VOLTAGE) / (MAX_VOLTAGE - MIN_VOLTAGE) * 100.0f
     */
     float getPercent();
 
@@ -45,8 +52,8 @@ namespace Battery {
 
     /**
      * Get the current state of the battery
-     * This acounts for full battery,
-     * Not just the "safe" bettery levels (20%-100%)
+     * This accounts for full battery,
+     * Not just the "safe" battery levels (20%-100%)
     */
     BatteryStates getBatteryState();
 }
