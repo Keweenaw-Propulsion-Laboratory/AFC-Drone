@@ -86,7 +86,8 @@ void setTopServo(float angle) {
 
     topServo = limitRange(angle + Configs::get().gimbalPitchOffset, 60 , 120);
 
-    if (Drone::getFlightWatchdogStatus() && Drone::getState() == Drone::States::FLIGHT){
+    if (Drone::getFlightWatchdogStatus() && Drone::getState() >= Drone::States::READY_ARMED &&
+        Drone::getState() != Drone::States::FAULT_ERROR) {
         pitchServo.write(topServo);   
     }
 }
@@ -104,7 +105,8 @@ void setBotServo(float angle) {
 
     bottomServo = limitRange( -angle + Configs::get().gimbalYawOffset, 60, 120);
 
-    if (Drone::getFlightWatchdogStatus() && Drone::getState() == Drone::States::FLIGHT){
+    if (Drone::getFlightWatchdogStatus() && Drone::getState() >= Drone::States::READY_ARMED &&
+        Drone::getState() != Drone::States::FAULT_ERROR) {
         yawServo.write(bottomServo);   
     }
     

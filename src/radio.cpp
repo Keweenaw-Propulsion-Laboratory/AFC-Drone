@@ -269,6 +269,9 @@ void update() {
                 case MessageType::HEARTBEAT :
                     // Heatbeat packet was found. Feed watchdog. 
                     Drone::feedFlightWatchdog();
+
+                    // Request state
+                    Drone::requestState(msg.heartbeat.state);
                 
                 default:
                     break;

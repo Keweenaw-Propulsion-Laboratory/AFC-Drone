@@ -13,13 +13,16 @@ namespace Drone {
     };
 
     enum class States: uint8_t {
-        BOOT, 
-        RADIO_SETUP,  
-        SENSOR_SETUP,
-        CONTROL_SETUP,
-        READY_ARMED,
-        FLIGHT,
-        FAULT_ERROR
+        BOOT = 0, 
+        RADIO_SETUP = 1,  
+        SENSOR_SETUP = 2,
+        CONTROL_SETUP = 3,
+        SAFE = 4, /** No movement allowed but all systems go */ 
+        READY_ARMED = 10, /** Gimbal movement allowed */
+        MAN_FLIGHT = 11, /** Manual motors and gimbal */
+        AUTO_FLIGHT = 12, /**Flight control driven motors and gimbal */ 
+        FAULT_ERROR = 255, /**Unrecoverable Error has occured */
+
     };
 
     /**
@@ -130,6 +133,6 @@ namespace Drone {
      */
     void feedFlightWatchdog();
 
-    bool requestState();
+    bool requestState(States state);
 
 };

@@ -146,7 +146,9 @@ namespace Radio {
         struct __attribute__((packed)) HeartbeatPacket {
             /**Requested state of the drone */
             Drone::States state; 
-            uint64_t reserved : 56;
+            bool enableMotors : 1;
+            bool enableGimbal : 1;
+            uint64_t reserved : 54;
         };
 
         // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything

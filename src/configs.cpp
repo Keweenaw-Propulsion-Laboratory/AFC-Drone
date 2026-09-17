@@ -82,7 +82,8 @@ static uint16_t checksum(ConfigT image)
 void save()
 {
     // If drone is inflight do run blocking save to EEPROM.
-    if (Drone::getState() == Drone::States::FLIGHT)
+    if (Drone::getState() == Drone::States::MAN_FLIGHT ||
+        Drone::getState() == Drone::States::AUTO_FLIGHT)
     {
         return;
     }
@@ -207,7 +208,8 @@ static ConfigResult apply(ConfigKey key, int32_t value, bool &changed)
 }
 
 ConfigResult set(ConfigKey key, int32_t value) {
-    if (Drone::getState() == Drone::States::FLIGHT)
+    if (Drone::getState() == Drone::States::MAN_FLIGHT ||
+        Drone::getState() == Drone::States::AUTO_FLIGHT)
     {
         return ConfigResult::UNSAFE_STATE;
     }
@@ -229,7 +231,8 @@ void setBatch(const ConfigUpdate *updates, ConfigResult *results,
     if (updates == nullptr)
         return;
 
-    if (Drone::getState() == Drone::States::FLIGHT)
+    if (Drone::getState() == Drone::States::MAN_FLIGHT ||
+        Drone::getState() == Drone::States::AUTO_FLIGHT)
     {
         for (uint8_t i = 0; i < count; ++i)
         {

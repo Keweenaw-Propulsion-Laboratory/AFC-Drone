@@ -180,11 +180,15 @@ void updateLEDS() {
         case States::SENSOR_SETUP :
             blinkInterval = 300; // Blink every 300 ms during sensor setup
             break;
-        case States::READY_ARMED :
+
+
+        case States::SAFE :
             ledFader();
             return;
 
-        case States::FLIGHT :
+        case States::READY_ARMED :
+        case States::MAN_FLIGHT  :
+        case States::AUTO_FLIGHT :
             doubleFlash();
             return;
 
@@ -259,7 +263,7 @@ bool startup() {
 
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
-            USB::sendText("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
+            USB::sendText("DRONE: State progressing from SENSOR_SETUP to SAFE");
             currentState = States::CONTROL_SETUP;
         }
 
@@ -269,7 +273,7 @@ bool startup() {
         Gimbal::setup();
         Motor::setup();
         startControlTimer();
-        currentState = States::READY_ARMED;
+        currentState = States::SAFE;
         break;
     
     case States::FAULT_ERROR : {
@@ -391,17 +395,33 @@ void feedFlightWatchdog() {
 }
 
 bool requestState(States state) {
-    // Perform checks to allow a safe transition
-    switch (state) {
-    case States::FLIGHT :
-        if (getState() != States::FAULT_ERROR) {
-            currentState = state;
-        }
+    // If the requested state is the current state skip
+    if (getState() == state) {return true;}
 
+    // Perform checks to allow a safe transition
+    if (getState() == States::FAULT_ERROR) {
+        // Unable to clear fault
+        return false;
+    }
     
-    break;
+    switch (state) {
+        case States::READY_ARMED :
+            currentState = state;
+            return true;
+        
+        case States::MAN_FLIGHT :
+            // Zero motor output before transition
+            activeTarget.bottomMotor = 0;
+            activeTarget.topMotor = 0;
+
+            // Update state
+            currentState = state;
+            return true;
     
+        case States::AUTO_FLIGHT :
+            return false; // Not implemented
     default:
+        return false;
         break;
     }
 }

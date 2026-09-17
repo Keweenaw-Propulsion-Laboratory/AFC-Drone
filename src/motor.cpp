@@ -71,13 +71,13 @@ void setMotor(uint8_t bottomMotorSpeed, uint8_t topMotorSpeed ) {
 
     // Only allow motor movement when watchdog is fed and state = flight
     if (Drone::getFlightWatchdogStatus() && 
-        Drone::getState() == Drone::States::FLIGHT) {
+        Drone::getState() == Drone::States::MAN_FLIGHT) {
         bottomMotor.writeMicroseconds(bottomSpeed);
         topMotor.writeMicroseconds(topSpeed);
     } else {
         bottomMotor.writeMicroseconds(ESC_MIN_US);
         topMotor.writeMicroseconds(ESC_MIN_US);
     }
-}
+}  
 
 } // namespace Motor

@@ -364,6 +364,7 @@ void update() {
         case MessageTypes::HEARTBEAT:
             Drone::feedFlightWatchdog();
         
+            Drone::requestState(pkt.data.heartbeat.state);
         default:
             break;
         }
