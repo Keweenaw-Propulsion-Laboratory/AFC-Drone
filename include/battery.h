@@ -18,6 +18,11 @@ namespace Battery {
      */
     void update();
 
+    /**
+     * @return True if battery monitoring has been initialized. 
+     */
+    bool setupComplete();
+
     /** 
     * Get the current voltage of the battery
     */

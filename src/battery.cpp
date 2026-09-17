@@ -9,6 +9,14 @@ namespace Battery{
     static constexpr int BATTERY_PIN = -1; // Analog input pin
     static constexpr int ADC_RESOLUTION_BITS = 12;   // ADC resolution (bits)
     static constexpr float VOLTAGE_ALPHA = 1.0f / 16.0f; // 16-sample equivalent rolling average
+    static constexpr int MIN_SAMPLE_PERIOD_MS = 10; // 10 ms minimum between samples.
+
+    static constexpr float MIN_VOLTAGE = 13.09f; // Minimum voltage for 4S LiPo, based on chart
+    static constexpr float MAX_VOLTAGE = 16.5f; // Maximum voltage for 4S LiPo, got from charging our battery to full
+    static constexpr float NOMINAL_VOLTAGE = 14.8f; // Nominal voltage for 4S LiPo, mostly for reference, not used in calculation
+    static constexpr float VOLTAGE_ERROR_MARGIN = 0.025f; // Allow 2.5% measurement error at the voltage limits
+    static constexpr float MIN_VALID_VOLTAGE = MIN_VOLTAGE * (1.0f - VOLTAGE_ERROR_MARGIN);
+    static constexpr float MAX_VALID_VOLTAGE = MAX_VOLTAGE * (1.0f + VOLTAGE_ERROR_MARGIN);
 
     static float rollingVoltage = 0.0f;
     static bool rollingVoltageInitialized = false;
@@ -28,6 +36,8 @@ namespace Battery{
         return true;
     }
 
+    bool setupComplete() {return initialized;}
+
     // Get the current voltage of the battery *Mainly copied from ArduinoDocs for analogRead()*
     static constexpr float V_REF = 16.5f;     // Analog reference voltage
     static constexpr int ADC_STEPS = (1 << ADC_RESOLUTION_BITS) - 1; // Number of steps (2^ADC_RESOLUTION_BITS - 1)
@@ -36,10 +46,16 @@ namespace Battery{
         return rollingVoltage;
     }
 
+
+    static elapsedMicros battSample = 0;
     void update() {
         if (!initialized) {
             return;
         }
+
+        if (battSample < MIN_SAMPLE_PERIOD_MS){return;}
+
+        battSample -= MIN_SAMPLE_PERIOD_MS;
 
         int rawValue = analogRead(BATTERY_PIN); // Read the analog input
         // Have to cast rawValue to a float during the division. As it will truncate to 0 for any ADC reading less than 4095.
@@ -52,13 +68,6 @@ namespace Battery{
             rollingVoltage += VOLTAGE_ALPHA * (voltage - rollingVoltage);
         }
     }
-
-    static constexpr float MIN_VOLTAGE = 13.09f; // Minimum voltage for 4S LiPo, based on chart
-    static constexpr float MAX_VOLTAGE = 16.5f; // Maximum voltage for 4S LiPo, got from charging our battery to full
-    static constexpr float NOMINAL_VOLTAGE = 14.8f; // Nominal voltage for 4S LiPo, mostly for reference, not used in calculation
-    static constexpr float VOLTAGE_ERROR_MARGIN = 0.025f; // Allow 2.5% measurement error at the voltage limits
-    static constexpr float MIN_VALID_VOLTAGE = MIN_VOLTAGE * (1.0f - VOLTAGE_ERROR_MARGIN);
-    static constexpr float MAX_VALID_VOLTAGE = MAX_VOLTAGE * (1.0f + VOLTAGE_ERROR_MARGIN);
 
     static float calculatePercent(float voltage) {
         return (voltage - MIN_VOLTAGE) / (MAX_VOLTAGE - MIN_VOLTAGE) * 100.0f;
