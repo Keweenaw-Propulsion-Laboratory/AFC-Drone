@@ -47,7 +47,7 @@ namespace Battery{
     }
 
 
-    static elapsedMicros battSample = 0;
+    static elapsedMillis battSample = 0;
     void update() {
         if (!initialized) {
             return;
@@ -95,4 +95,4 @@ namespace Battery{
             return BatteryStates::MAXIMUM;
         }
     }
-}
+} // namespace Battery

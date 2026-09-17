@@ -228,10 +228,7 @@ bool startup() {
             state = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage BOOT -> BATTERY");
             
-        } 
-
-        if (Battery::setupComplete()) {
-            // Transition to next state
+        } else {
             state = States::RADIO_SETUP;
             USB::sendText("DRONE: State progressing from BOOT to RADIO_SETUP");
         }
