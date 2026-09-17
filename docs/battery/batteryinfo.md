@@ -2,9 +2,9 @@
 
 The Battery Monitor module tracks the voltage of the 4S LiPo pack powering the flight
 computer and classifies it into a coarse state that flight software can act on.
-It samples a Teensy analog input at 12-bit resolution, converts the reading to pack
-voltage, smooths it, and maps it onto a percentage across a fixed voltage window
-(13.09V to 16.50V). Those levels become discrete `BatteryStates` values (`MAXIMUM`,
+It samples a Teensy analog input at 12-bit resolution through a 5:1 resistor divider,
+converts the reading to pack voltage, smooths it, and maps it onto a percentage across
+a fixed voltage window (13.09V to 16.50V). Those levels become discrete `BatteryStates` values (`MAXIMUM`,
 `MIDPOINT`, `LOW_BATTERY`, `CRITICAL_BATTERY`, or `FAULT_ERROR`).
 
 `Battery::update()` is called every pass from `loop()` and self-throttles its ADC
@@ -22,27 +22,92 @@ consistent within one sample.
 ## Hardware
 
 The Teensy 4.1 ADC reference is **fixed at 3.3V** — `analogReference()` is a no-op on
-this core. A 4S pack reaches 16.8V fully charged, which would destroy the pin, so the
-pack **must** be measured through a resistor divider that scales its range into
-0–3.3V.
+this core. A 4S pack reaches 16.8V fully charged, so it is measured through a
+**5:1 resistor divider** built from 10k resistors:
 
-The conversion in `getVoltage()` currently uses a single `V_REF = 16.5f` constant in
-place of the two physical quantities involved:
+```
+   Pack +
+      |
+     10k  ┐
+      |   |
+     10k  |
+      |   ├─ R1 = 40k  (four 10k in series)
+     10k  |
+      |   |
+     10k  ┘
+      |
+      ├────────────>  ANALOG PIN      3.30 V when the pack is at 16.50 V
+      |
+     10k  ─ R2 = 10k
+      |
+     GND  (common with Pack -)
+```
+
+* **R1 (high side):** 40kΩ — four 10kΩ resistors in series
+* **R2 (low side):** 10kΩ
+* **Ratio:** (R1 + R2) / R2 = 50k / 10k = **5.00:1**
+
+| Quantity | Value | Note |
+| :--- | :--- | :--- |
+| Divider output at 16.50V | 3.300V | Exactly the ADC reference |
+| Maximum measurable pack voltage | 16.50V | 3.3V × 5.00 |
+| ADC resolution at the pack | ~4.03mV per LSB | 3.3V / 4095, referred through the divider |
+| Quiescent drain | 330µA at 16.5V | ~7.9mAh per day, continuous |
+| Source impedance seen by the ADC | 8.0kΩ | R1 ∥ R2 |
+
+### Why `V_REF = 16.5f` is correct here
+
+`getVoltage()` computes:
 
 ```
 voltage = (raw / ADC_STEPS) * V_REF
 ```
 
-This is only correct if the divider ratio is exactly 16.5 / 3.3 = **5.00:1**. The
-divider is not described anywhere in the schematic notes, and the code carries no
-`DIVIDER_RATIO` constant to trim against the resistors actually fitted. Before flight,
-confirm the fitted divider and split the constant into the ADC reference and the
-divider ratio so the two can be adjusted independently.
+With this divider the single `V_REF = 16.5f` constant is numerically right, because
+3.3V × 5.00 = 16.5V exactly. It is still two physical quantities folded into one
+number — the ADC reference and the divider ratio — so it cannot be trimmed against the
+resistors actually fitted, and changing the pack chemistry or the divider silently
+changes the ADC scaling. Splitting it into `ADC_REF_V = 3.3f` and
+`DIVIDER_RATIO = 5.0f` would keep the same result while making each adjustable on its
+own.
 
-One consequence worth knowing: because the scale saturates at `V_REF`, a full-scale
-ADC reading maps to exactly 16.50V and the conversion can never produce a higher
-value. The over-voltage half of the fault check below is therefore unreachable as
-written.
+### Consequences to be aware of
+
+**A fully charged pack saturates the ADC.** At 16.8V the divider puts 3.36V on the pin,
+above the 3.3V reference, so the reading pins at 4095 and reports 16.50V. The top
+0.3V of charge is invisible, and every pack between 16.50V and 16.80V reads identically.
+This also means the over-voltage half of the fault check (`> 16.91V`) can never fire —
+the conversion cannot produce a value that high. Verify 3.36V is within the analog
+pin's absolute maximum rating for the fitted Teensy before flight; if more headroom is
+wanted, raise the ratio (for example 6:1 from 50k/10k) and adjust the scaling constant
+to match.
+
+**Use 1% resistors or better.** The code assumes exactly 5.00:1, so any divider error
+appears directly as a voltage error:
+
+| Resistor tolerance | Worst-case ratio | A 16.50V pack reads |
+| :--- | :--- | :--- |
+| 5% | 5.42:1 | 15.22V (−7.8%) |
+| 1% | 5.08:1 | 16.24V (−1.6%) |
+| 0.1% | 5.01:1 | 16.47V (−0.2%) |
+
+With 5% parts a full pack can be misreported as `MIDPOINT`, since the state bands are
+only ~0.68V wide. Stacking four resistors for R1 helps slightly — independent
+tolerances partly average out — but it does not substitute for specifying the part.
+After assembly, measure the pack with a meter and compare against the reported voltage;
+if they disagree, trim the scaling constant rather than assuming the nominal ratio.
+
+**The 8kΩ source impedance is high for a 12-bit conversion.** The ADC's sampling
+capacitor has to charge through that impedance within the sample window, and high
+source impedance shows up as readings that sag toward zero. A small capacitor
+(0.1µF is typical) across R2 gives the sampler a local charge reservoir and also
+low-pass filters switching noise from the ESCs. This is a recommendation, not a
+measured requirement — if it is omitted, check the reported voltage against a meter
+before trusting it.
+
+**The divider draws current whenever the pack is connected.** 330µA is negligible in
+flight but never switches off; a pack left connected for a week loses roughly 55mAh.
+Disconnect the pack for storage.
 
 ## Battery Voltage Specifications & Safety Guide
 
@@ -112,7 +177,9 @@ itself.
   return `FAULT_ERROR` to flag hardware disconnects or invalid sensor readings.
   Readings within that tolerance remain `CRITICAL_BATTERY` or `MAXIMUM` as appropriate.
   `FAULT_ERROR` means the measurement cannot be trusted — it does **not** mean the pack
-  is discharged.
+  is discharged. In practice only the lower bound can trigger: the 5:1 divider saturates
+  the ADC at 16.50V, so the conversion can never report the 16.91V that the upper bound
+  would need. See [Hardware](#hardware).
 
 ## Integration
 

@@ -8,10 +8,15 @@
 * Samples the 4S LiPo pack voltage through a Teensy analog input, smooths it,
 * and classifies it into a coarse state the flight software can act on.
 *
-* The pack is measured through a resistor divider: the Teensy 4.1 ADC reference
-* is fixed at 3.3 V, so the divider must scale the pack's 0-16.5 V range into
-* that window. See docs/battery/batteryinfo.md for the scaling and the fault
-* thresholds.
+* The pack is measured through a 5:1 resistor divider built from 10k parts -
+* 40k high side (four 10k in series) over 10k to ground. The Teensy 4.1 ADC
+* reference is fixed at 3.3 V, so 3.3 V at the pin is 16.5 V at the pack, which
+* is why the conversion constant is 16.5. Specify 1% resistors: the code assumes
+* exactly 5.00:1 and cannot trim for the parts actually fitted.
+*
+* Note that a fully charged pack (16.8 V) puts 3.36 V on the pin and saturates
+* the ADC, so anything above 16.5 V reads as 16.5 V. See
+* docs/battery/batteryinfo.md for the full divider notes and fault thresholds.
 *
 * @warning BATTERY_PIN in battery.cpp is currently -1 (unassigned). Until a real
 *          pin is set, setup() reports the problem over USB and leaves the module
