@@ -233,6 +233,18 @@ static bool isValidRxHeader(const header_t& header) {
 
 
 /**
+ * Baud rate for targets where the link is a real UART. Ignored by the Teensy's
+ * native USB CDC, which always runs at full USB speed.
+ */
+#ifndef USB_BAUD
+#define USB_BAUD 115200
+#endif
+
+void setup() {
+    Serial.begin(USB_BAUD);
+}
+
+/**
  * Periodic USB function
  * Reads any new USB packets into the rx buffer
  * Sends out any packets in the tx buffer

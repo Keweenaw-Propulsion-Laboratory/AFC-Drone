@@ -8,6 +8,7 @@
 #include "configs.h"
 
 void setup() {
+    USB::setup();    // Bring up the serial link before anything reports on it
     Configs::load(); // Load configs from flash
 
     while (!Drone::startup()) {}
