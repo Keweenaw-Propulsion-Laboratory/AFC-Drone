@@ -2,6 +2,8 @@
 
 #include "Servo.h"
 #include "configs.h"
+#include "usb.h"
+
 #include "Arduino.h"
 
 namespace Gimbal {
@@ -152,7 +154,14 @@ void set(float pitch, float yaw) {
     // Resulting top servo setpoint
     float bottomServo = topInterp + x_frac * (bottomInterp - topInterp);
     
-    // Serial.printf("Top %f \nBot %f ", topServo, bottomServo);
+    static elapsedMillis timer = 0;
+    char debug[100];
+    sprintf(debug, "Pitch: %.2f\nYaw: %f.\nTop: %.2f\nBot: %.2f", pitch, yaw, topServo, bottomServo);
+
+    if (timer > 1000) {
+        USB::sendText(debug);
+        timer -= 1000;
+    }
 
     // Set servos
     setTopServo(topServo);
