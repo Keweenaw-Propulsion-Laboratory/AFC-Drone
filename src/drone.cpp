@@ -16,7 +16,7 @@ static constexpr uint16_t COMM_WATCHDOG_SAFETY_MS = 100;
 // isn't delayed behind lower-priority peripheral interrupts.
 static constexpr uint8_t CONTROL_TIMER_PRIORITY = 64;
 
-static constexpr int STATUS_LED = -1; // TODO wire LED on flight computer
+static constexpr int STATUS_LED = 7; // TODO wire LED on flight computer
 
 namespace Drone {
 
@@ -249,7 +249,7 @@ bool startup() {
 
     case States::SENSOR_SETUP :
         // Needs to init Gryo. Any other sensors can also go in here
-
+        USB::sendText("Gyro");
         // Run setup functions here
         if (!Gyro::setup()) {
             currentState = States::FAULT_ERROR;
@@ -270,6 +270,7 @@ bool startup() {
         break;
 
     case States::CONTROL_SETUP :
+        USB::sendText("Control");
         Gimbal::setup();
         Motor::setup();
         startControlTimer();
@@ -295,7 +296,7 @@ bool startup() {
         break;
     }
 
-    if (currentState == States::READY_ARMED){
+    if (currentState == States::SAFE){
         USB::sendText("Drone ARMED");
         return true;
     }

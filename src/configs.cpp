@@ -14,10 +14,10 @@
  * load() falls back to defaults() - comes up straight into SAFE.
  */
 #ifndef DEFAULT_RADIO_ENABLED
-#define DEFAULT_RADIO_ENABLED true
+#define DEFAULT_RADIO_ENABLED false
 #endif
 #ifndef DEFAULT_GYRO_ENABLED
-#define DEFAULT_GYRO_ENABLED true
+#define DEFAULT_GYRO_ENABLED false
 #endif
 
 namespace Configs {

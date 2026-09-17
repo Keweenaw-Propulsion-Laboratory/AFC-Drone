@@ -25,6 +25,23 @@ static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
 static constexpr size_t USB_FRAME_OVERHEAD = 2 + 1 + 4 + 2;
 
+/**
+ * The tx path in update() only pops a packet once the port reports room for
+ * the whole frame. On a core whose Serial is a ring buffer that check has a
+ * ceiling: availableForWrite() can never exceed SERIAL_TX_BUFFER_SIZE - 1,
+ * even with the buffer completely empty. A frame larger than that ceiling
+ * therefore never satisfies the condition, is never popped, and blocks every
+ * packet queued behind it - permanently, since the head is what gets peeked.
+ *
+ * Teensy's Serial is USB CDC and defines no such macro, so this is skipped
+ * there; it fires only on cores where the limit is real.
+ */
+#if defined(SERIAL_TX_BUFFER_SIZE)
+static_assert(USB_FRAME_OVERHEAD + MAX_DATA_LEN <= SERIAL_TX_BUFFER_SIZE - 1,
+              "Serial tx buffer is too small for the largest USB frame; the tx "
+              "queue would deadlock on the first oversized packet");
+#endif
+
 // Identify handshake: the dashboard sends RAW+IDENTIFY_QUERY_BYTE on every
 // fresh connection to tell a direct-wired drone apart from a base station
 // relay without the user picking a mode manually. See also
@@ -224,6 +241,10 @@ static bool isValidRxHeader(const header_t& header) {
 
     if (header.type == MessageTypes::RAW) {
         return header.packetLength == 1;
+    }
+
+    if (header.type == MessageTypes::HEARTBEAT) {
+        return header.packetLength == 8;
     }
 
     return header.type == MessageTypes::CONFIG &&
