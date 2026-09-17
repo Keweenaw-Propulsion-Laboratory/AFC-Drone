@@ -80,6 +80,18 @@ bool setup() {
     // A variable to help with timing during the setup process
     static uint32_t setupTimer;
 
+    // Checked here rather than only in update(), because the RESET1 case below
+    // drives the reset line and RADIO_INIT reads the RFM69 version register.
+    // With no module fitted, MISO floats and init() fails, which the caller
+    // treats as a fatal setup error.
+    if (!Configs::get().radioEnabled) {
+        if (setupState != SetupStates::DISABLED) {
+            setupState = SetupStates::DISABLED;
+            USB::sendText("Radio disabled by config");
+        }
+        return true;
+    }
+
     switch (setupState) {
         case SetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
@@ -149,7 +161,11 @@ bool setup() {
 }
 
 bool setupComplete() {
-    return setupState == SetupStates::COMPLETE;
+    // DISABLED counts as complete: the boot sequence asks this to decide
+    // whether it may move on, and a radioless vehicle has nothing to wait for.
+    // Use linkConnected() to ask whether traffic is actually possible.
+    return setupState == SetupStates::COMPLETE ||
+           setupState == SetupStates::DISABLED;
 }
 
 bool linkConnected() {
@@ -319,6 +335,12 @@ void update() {
 
 /** Adds message to radio queue */
 static void sendMessage(Message data, MessageType type) {
+    // Nothing drains the queue while the radio is off, so telemetry pushed
+    // from loop() would otherwise wedge the buffer full and inflate txDropped
+    // on every frame.
+    if (setupState == SetupStates::DISABLED)
+        return;
+
     if (txBuffer.size() >= TX_SIZE)
         txDropped++;
 

@@ -33,12 +33,13 @@ namespace Configs {
         int16_t gimbalYawOffset;
         int8_t motor1offset;
         int8_t motor2offset;
+        bool gyroEnabled;
     };
 
     // Stored EEPROM layout. Any change to the struct above must bump
     // CONFIG_VERSION and add a matching case to migrate(), or an existing
     // vehicle's saved trim is silently reinterpreted under the new layout.
-    static_assert(sizeof(PersistentConfig) == 19, "PersistentConfig layout changed");
+    static_assert(sizeof(PersistentConfig) == 20, "PersistentConfig layout changed");
 
     /** Identifies a single config setting for set(). */
     enum class ConfigKey : uint16_t {
@@ -51,6 +52,9 @@ namespace Configs {
         GimbalYawOffset,
         Motor1Offset,
         Motor2Offset,
+        // Appended, never reordered: these values go out on the wire, so an
+        // existing base station must keep resolving the keys it already knows.
+        GyroEnabled,
     };
 
     /**Valid config operations */

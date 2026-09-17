@@ -4,9 +4,25 @@
 #include <cstring>
 #include "drone.h"
 
+/**
+ * Default bring-up state for the two peripherals the boot sequence blocks on.
+ *
+ * A bench target with no RFM69 and no BNO08x wired up needs these off, or
+ * Drone::startup() dead-ends in FAULT_ERROR before any of the USB protocol
+ * becomes reachable. Overriding them at build time rather than requiring a
+ * config write means a freshly flashed board - whose EEPROM is blank, so
+ * load() falls back to defaults() - comes up straight into SAFE.
+ */
+#ifndef DEFAULT_RADIO_ENABLED
+#define DEFAULT_RADIO_ENABLED true
+#endif
+#ifndef DEFAULT_GYRO_ENABLED
+#define DEFAULT_GYRO_ENABLED true
+#endif
+
 namespace Configs {
 static constexpr uint32_t CONFIG_MAGIC = 0x41455245; // AERE
-const uint8_t CONFIG_VERSION = 2;
+const uint8_t CONFIG_VERSION = 3;
 static constexpr int EEPROM_ADDRESS = 0;
 
 static PersistentConfig config{};
@@ -38,6 +54,31 @@ struct __attribute__((packed)) PersistentConfigV1
 };
 
 /**
+ * PersistentConfig as it was laid out at CONFIG_VERSION 2.
+ *
+ * Version 3 appended gyroEnabled. Appending keeps every v2 field at the same
+ * offset, so the migration is a straight field-by-field carry-over rather than
+ * the reinterpretation v1 needed.
+ */
+struct __attribute__((packed)) PersistentConfigV2
+{
+    uint32_t magic;
+    uint16_t version;
+    uint16_t crc;
+    bool debugMode;
+    bool usbRelayEnabled;
+    bool radioEnabled;
+    bool skipRadioHandshake;
+    uint8_t txPowerDbm;
+    int16_t gimbalPitchOffset;
+    int16_t gimbalYawOffset;
+    int8_t motor1offset;
+    int8_t motor2offset;
+};
+
+static_assert(sizeof(PersistentConfigV2) == 19, "v2 layout is frozen history");
+
+/**
  * Set the default values for configs here.
  */
 PersistentConfig defaults()
@@ -46,16 +87,16 @@ PersistentConfig defaults()
         CONFIG_MAGIC,   // Magic
         CONFIG_VERSION, // Version
         0,              // CRC
-        false,          // Debug mode
-        true,           // USB enabled
-        true,           // Radio enabled
-        true,           // Skip radio handshake
-        20,             // Radio transmit power
+        false,                 // Debug mode
+        true,                  // USB enabled
+        DEFAULT_RADIO_ENABLED, // Radio enabled
+        true,                  // Skip radio handshake
+        20,                    // Radio transmit power
         90, // Gimbal Offset
         89, // Gimbal Offset
         0,  // Motor Offset
         0, // Motor Offset
-
+        DEFAULT_GYRO_ENABLED, // Gyro enabled
     };
 }
 
@@ -200,6 +241,13 @@ static ConfigResult apply(ConfigKey key, int32_t value, bool &changed)
         config.motor2offset = static_cast<int8_t>(value);
         break;
 
+    case ConfigKey::GyroEnabled:
+        if (value != 0 && value != 1)
+            return ConfigResult::INVALID_VALUE;
+        changed = config.gyroEnabled != static_cast<bool>(value);
+        config.gyroEnabled = static_cast<bool>(value);
+        break;
+
     default:
         return ConfigResult::INVALID_KEY;
     }
@@ -287,6 +335,9 @@ int32_t read(ConfigKey key, ConfigResult &status)
 
     case ConfigKey::Motor2Offset:
         return config.motor2offset;
+
+    case ConfigKey::GyroEnabled:
+        return config.gyroEnabled ? 1 : 0;
     }
 
     // All defined ConfigKey values are handled above. This protects callers
@@ -300,6 +351,35 @@ static void migrate(PersistentConfig &stored)
 {
     switch (stored.version)
     {
+
+    case (2):
+    {
+        // v3 only appended gyroEnabled, so every v2 field sits at the offset it
+        // always did. Validate under the old struct first - nothing in the
+        // stored image has been checked yet - then carry the fields forward and
+        // let defaults() supply the new one.
+        PersistentConfigV2 legacy{};
+        EEPROM.get(EEPROM_ADDRESS, legacy);
+
+        if (legacy.magic != CONFIG_MAGIC ||
+            legacy.crc != checksum(legacy))
+        {
+            stored = defaults();
+            break;
+        }
+
+        stored = defaults();
+        stored.debugMode = legacy.debugMode;
+        stored.usbRelayEnabled = legacy.usbRelayEnabled;
+        stored.radioEnabled = legacy.radioEnabled;
+        stored.skipRadioHandshake = legacy.skipRadioHandshake;
+        stored.txPowerDbm = legacy.txPowerDbm;
+        stored.gimbalPitchOffset = legacy.gimbalPitchOffset;
+        stored.gimbalYawOffset = legacy.gimbalYawOffset;
+        stored.motor1offset = legacy.motor1offset;
+        stored.motor2offset = legacy.motor2offset;
+        break;
+    }
 
     case (1):
     {

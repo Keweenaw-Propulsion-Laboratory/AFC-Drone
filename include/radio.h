@@ -23,7 +23,15 @@ namespace Radio {
             RESET2,
             RADIO_INIT,
             SET_CONFIG,
-            COMPLETE
+            COMPLETE,
+            /**
+             * Radio turned off by config, so bring-up never touched the SPI
+             * bus. Distinct from COMPLETE because update() and sendMessage()
+             * must stay away from hardware that may not be fitted, while
+             * setupComplete() still has to report success or the boot state
+             * machine would fault on a vehicle that is deliberately radioless.
+             */
+            DISABLED
         };
 
         /**
