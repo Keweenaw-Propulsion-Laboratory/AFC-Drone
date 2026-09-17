@@ -21,7 +21,7 @@ static constexpr int STATUS_LED = -1; // TODO wire LED on flight computer
 namespace Drone {
 
 // Initialize state to BOOT
-static volatile States state = States::BOOT;
+static volatile States currentState = States::BOOT;
 
 // Smoothing factor for the rolling loop-time average. 0.1 means the average
 // settles over roughly the last 10 ticks.
@@ -50,7 +50,7 @@ static Target_t activeTarget;
 
 // MARK: Helpers
 
-States getState() {return state;}
+States getState() {return currentState;}
 
 /**
  * ISR fired by the hardware timer at CONTROL_LOOP_HZ.
@@ -172,7 +172,7 @@ void updateLEDS() {
 
     uint32_t blinkInterval = 500; // Nominal blink interval every 500ms
 
-    switch (state) {
+    switch (currentState) {
         case States::RADIO_SETUP :
             blinkInterval = 100; // Blink every 100 ms during radio setup
             break;
@@ -220,25 +220,25 @@ bool startup() {
     USB::update(); // Update the USB stack to allow for prints
     updateLEDS(); // Update status LEDS
 
-    switch (state)
+    switch (currentState)
     {
     case States::BOOT:
         // This state handles any internal initialization that the controller may need to do
         pinMode(STATUS_LED, OUTPUT);       
         
         // Transition to next state
-        state = States::RADIO_SETUP;
+        currentState = States::RADIO_SETUP;
         USB::sendText("DRONE: State progressing from BOOT to RADIO_SETUP");
         break;
     
     case States::RADIO_SETUP :
         if(!Radio::setup()) {
-            state = States::FAULT_ERROR;
+            currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage RADIO_SETUP");
         }
 
         if (Radio::setupComplete()) {
-            state = States::SENSOR_SETUP;
+            currentState = States::SENSOR_SETUP;
             USB::sendText("DRONE: State progressing from RADIO_SETUP to SENSOR_SETUP");
         }
         break;
@@ -248,7 +248,7 @@ bool startup() {
 
         // Run setup functions here
         if (!Gyro::setup()) {
-            state = States::FAULT_ERROR;
+            currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
         }
 
@@ -260,7 +260,7 @@ bool startup() {
         // Check for complete here. 
         if (Gyro::setupComplete()) { // Add && GPS::setupComplete()
             USB::sendText("DRONE: State progressing from SENSOR_SETUP to READY_ARMED");
-            state = States::CONTROL_SETUP;
+            currentState = States::CONTROL_SETUP;
         }
 
         break;
@@ -269,7 +269,7 @@ bool startup() {
         Gimbal::setup();
         Motor::setup();
         startControlTimer();
-        state = States::READY_ARMED;
+        currentState = States::READY_ARMED;
         break;
     
     case States::FAULT_ERROR : {
@@ -291,7 +291,7 @@ bool startup() {
         break;
     }
 
-    if (state == States::READY_ARMED){
+    if (currentState == States::READY_ARMED){
         USB::sendText("Drone ARMED");
         return true;
     }
@@ -321,7 +321,7 @@ static void recordTelemetry() {
     telemetry.loopTimeMin  = bestTime;
     telemetry.missedTicks  = missedTicks;
     telemetry.runtimeSec   = millis() / 1000;
-    telemetry.state        = state;
+    telemetry.state        = currentState;
 
     telemetry.gimbalPitch    = Gimbal::getPitch();
     telemetry.gimbalYaw      = Gimbal::getYaw();
@@ -388,6 +388,22 @@ bool getFlightWatchdogStatus() {
 // Sets the time since last seen to 0. 
 void feedFlightWatchdog() {
     flightWatchdog = 0;
+}
+
+bool requestState(States state) {
+    // Perform checks to allow a safe transition
+    switch (state) {
+    case States::FLIGHT :
+        if (getState() != States::FAULT_ERROR) {
+            currentState = state;
+        }
+
+    
+    break;
+    
+    default:
+        break;
+    }
 }
 
 
