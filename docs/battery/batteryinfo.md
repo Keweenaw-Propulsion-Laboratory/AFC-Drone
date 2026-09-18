@@ -105,8 +105,8 @@ low-pass filters switching noise from the ESCs. This is a recommendation, not a
 measured requirement — if it is omitted, check the reported voltage against a meter
 before trusting it.
 
-**The divider draws current whenever the pack is connected.** 330µA is negligible in
-flight but never switches off; a pack left connected for a week loses roughly 55mAh.
+**The divider draws current whenever the breaker is switched on.** 330µA is negligible in
+flight. A pack left connected for a week loses roughly 55mAh.
 Disconnect the pack for storage.
 
 ## Battery Voltage Specifications & Safety Guide

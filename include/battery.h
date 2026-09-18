@@ -53,7 +53,7 @@ namespace Battery {
     /**
      * @return True once the analog pin has been configured and the module is
      *         sampling. False if BATTERY_PIN is unassigned or setup() has not
-     *         run, in which case every reading below is meaningless.
+     *         run.
      */
     bool setupComplete();
 

@@ -1,5 +1,13 @@
 # Radio API
 
+> [!WARNING]
+> This document has been deprecated in favor of the combined 
+[dashboard-protocol.md](./dashboard-protocol.md).
+>The dashboard has been updated to accept messages over radio and USB and all 
+protocol notes have been documented in the new document. 
+
+
+
 The `Radio` class manages the RFM69 radio used by the autonomous drone. It initializes the transceiver, negotiates a connection with the base station, queues outgoing telemetry, receives incoming commands, and dispatches messages according to their packet type.
 
 > [!IMPORTANT]
