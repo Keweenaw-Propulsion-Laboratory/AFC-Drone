@@ -6,6 +6,7 @@
 #include "gyro.h"
 #include "usb.h"
 #include "configs.h"
+#include "battery.h"
 
 void setup() {
     Configs::load(); // Load configs from flash
@@ -20,6 +21,7 @@ void loop() {
     Radio::update();
     USB::update();
     Gyro::update();
+    Battery::update();
 
     // Telemetry. The control ISR records a snapshot every tick; sending it is
     // loop()'s job, because pushing to the radio and USB tx queues is not

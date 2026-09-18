@@ -10,6 +10,7 @@
 #include "usb.h"
 #include "motor.h"
 #include "configs.h"
+#include "battery.h"
 
 namespace Radio {
 
@@ -348,7 +349,7 @@ void sendStatus2(const Drone::Telemetry_t& t) {
     
     msg.status2.bottomMotorSet = t.bottomMotorSet;
     msg.status2.topMotorSet = t.topMotorSet;
-    msg.status2.voltage = 0; // TODO connect to battery monitor @crheilma-code
+    msg.status2.voltage = floatToFixedU(Battery::getVoltage(), RADIO_VOLTAGE_SCALE);
     // RSSI is owned by loop() context, not the control tick, so it is read
     // live rather than coming from the snapshot.
     msg.status2.rssi = avgRSSI;

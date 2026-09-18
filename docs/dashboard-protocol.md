@@ -98,7 +98,7 @@ The drone sends this 54-byte record every 100 ms while the main loop runs.
 | 14 | `int16` | `bottomServoSet` | Bottom servo setpoint | Live value |
 | 16 | `uint8` | `motor1Set` | Bottom motor output | Live value |
 | 17 | `uint8` | `motor2Set` | Top motor output | Live value |
-| 18 | `uint16` | `voltage` | Battery voltage | Always `0` currently |
+| 18 | `uint16` | `voltage` | Battery voltage | Smoothed pack voltage from `Battery::getVoltage()`, fixed-point ×1000 (V → mV). Divide by 1000 to display volts. Clamped to 0–65535, so the field cannot wrap on a bad reading. See [Battery Monitor](battery/batteryinfo.md) |
 | 20 | `int16` × 4 | `qR`, `qI`, `qJ`, `qK` | Quaternion | Drone-body-frame orientation (remapped from the raw BNO08x mounting axes), fixed-point ×32767 (component range −1.0–1.0) |
 | 28 | `int16` × 3 | `accelX`, `accelY`, `accelZ` | Acceleration | Gyro world-frame linear acceleration, fixed-point ×1000 (m/s² → mm/s²) |
 | 34 | `int16` × 3 | `velX`, `velY`, `velZ` | Velocity | Gyro dead-reckoned velocity, fixed-point ×1000 (m/s → mm/s) |
