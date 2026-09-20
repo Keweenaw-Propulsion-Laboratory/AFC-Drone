@@ -93,7 +93,7 @@ namespace Radio {
         struct __attribute__((packed)) StatusMsg2_t {
             uint16_t bottomMotorSet; // Motor 1 set point
             uint16_t topMotorSet; // Motor 2 set point
-            uint16_t voltage; // Current voltage of the battery. 
+            uint16_t voltage; // Smoothed battery pack voltage, millivolts (V * RADIO_VOLTAGE_SCALE)
             uint16_t rssi; // The strength of the radio connection
         };
 
@@ -228,12 +228,28 @@ namespace Radio {
     constexpr float RADIO_ACCEL_SCALE = 1000.0f;  // m/s^2 -> mm/s^2
     constexpr float RADIO_VEL_SCALE = 1000.0f;    // m/s -> mm/s
     constexpr float RADIO_POS_SCALE = 100.0f;     // m -> cm
+    constexpr float RADIO_VOLTAGE_SCALE = 1000.0f; // V -> mV
 
     inline int16_t floatToFixed(float value, float scale) {
         float scaled = value * scale;
         if (scaled > 32767.0f) scaled = 32767.0f;
         if (scaled < -32768.0f) scaled = -32768.0f;
         return static_cast<int16_t>(scaled);
+    }
+
+    /**
+     * Unsigned counterpart of floatToFixed(), for status fields declared
+     * uint16_t.
+     *
+     * Clamping at zero is the point: converting a negative float through the
+     * signed helper and into an unsigned field wraps it to ~65535, turning a
+     * bad reading into a plausible-looking large value.
+     */
+    inline uint16_t floatToFixedU(float value, float scale) {
+        float scaled = value * scale;
+        if (scaled > 65535.0f) scaled = 65535.0f;
+        if (scaled < 0.0f) scaled = 0.0f;
+        return static_cast<uint16_t>(scaled);
     }
 
     /**

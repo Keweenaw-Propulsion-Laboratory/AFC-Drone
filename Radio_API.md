@@ -1,5 +1,13 @@
 # Radio API
 
+> [!WARNING]
+> This document has been deprecated in favor of the combined 
+[dashboard-protocol.md](./dashboard-protocol.md).
+>The dashboard has been updated to accept messages over radio and USB and all 
+protocol notes have been documented in the new document. 
+
+
+
 The `Radio` class manages the RFM69 radio used by the autonomous drone. It initializes the transceiver, negotiates a connection with the base station, queues outgoing telemetry, receives incoming commands, and dispatches messages according to their packet type.
 
 > [!IMPORTANT]
@@ -404,6 +412,14 @@ enum class DroneStates : uint8_t {
 
 ## `STATUS1`: Gimbal, motors, and battery
 
+> [!WARNING]
+> The `STATUS` packet layouts in this section no longer match
+> [`include/radio.h`](include/radio.h). The battery `voltage` field now lives in
+> `StatusMsg2_t` alongside the motor setpoints and RSSI, not in `StatusMsg1_t`, and
+> the quaternion/accel/velocity/position records have shifted accordingly.
+> [`docs/dashboard-protocol.md`](docs/dashboard-protocol.md) reflects the current
+> layout; treat it as authoritative until this document is regenerated.
+
 ```cpp
 struct __attribute__((packed)) StatusMsg1_t {
     int8_t gimbalPitchNorm;
@@ -424,7 +440,7 @@ struct __attribute__((packed)) StatusMsg1_t {
 | `3` | `bottomServoSet` | `uint8_t` | Bottom servo command in degrees |
 | `4` | `motor1set` | `uint8_t` | Motor telemetry field; not assigned |
 | `5` | `motor2set` | `uint8_t` | Motor telemetry field; not assigned |
-| `6` | `voltage` | `uint16_t` | Battery voltage field; not assigned |
+| `6` | `voltage` | `uint16_t` | Battery voltage, fixed-point ×1000 (V → mV). Assigned from `Battery::getVoltage()` via `floatToFixedU()` (in `StatusMsg2_t`, see warning above) |
 
 The gimbal implementation stores requested pitch and yaw as floats. `sendStatus1()` converts them to signed 8-bit integers, discarding fractional degrees.
 
@@ -921,7 +937,7 @@ The supplied source does not yet define:
 3. Coordinate frames and axis signs.
 4. GPS validity and unavailable-value encoding.
 5. Motor command range and units.
-6. Battery voltage scaling.
+6. ~~Battery voltage scaling.~~ Defined: `RADIO_VOLTAGE_SCALE = 1000.0f` (V → mV).
 7. RSSI encoding.
 8. `CONFIG` payload formats.
 9. Whether status packets require acknowledgments.

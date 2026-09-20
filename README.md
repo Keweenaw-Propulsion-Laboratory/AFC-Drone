@@ -35,6 +35,7 @@ The flight software is divided into several subsystem-focused modules.
 | `gimbal.h/.cpp`  | Gimbal servo control, mechanical correction, and position interpolation                        |
 | `error.h/.cpp`   | Error storage and system fault reporting                                                       |                    |
 | `configs.h/.cpp` | Versioned persistent settings in EEPROM: load, validate, migrate, and apply configuration      |
+| `battery.h/.cpp` | 4S LiPo pack voltage sampling, smoothing, and battery state classification                     |
 
 The `Drone` class coordinates the individual subsystems and tracks the overall state of the vehicle.
 

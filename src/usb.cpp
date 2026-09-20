@@ -10,6 +10,7 @@ between the Drone and a pysically connected Serial terminal
 #include "motor.h"
 #include "configs.h"
 #include "gyro.h"
+#include "battery.h"
 
 #include "Arduino.h"
 #include "circular_buffer.h"
@@ -78,7 +79,7 @@ struct __attribute__((packed)) Telemetry {
     // Status 2
     uint8_t bottomMotorSet;
     uint8_t topMotorSet;
-    uint16_t voltage;
+    uint16_t voltage; // Smoothed battery pack voltage, millivolts (V * RADIO_VOLTAGE_SCALE)
     // Status 3
     int16_t qR;
     int16_t qI;
@@ -468,7 +469,7 @@ void sendTelemetry(const Drone::Telemetry_t& t) {
     tx_message.telemetry.bottomServoSet = t.bottomServoSet;
     tx_message.telemetry.bottomMotorSet = t.bottomMotorSet;
     tx_message.telemetry.topMotorSet = t.topMotorSet;
-    tx_message.telemetry.voltage = 0;
+    tx_message.telemetry.voltage = Radio::floatToFixedU(Battery::getVoltage(), Radio::RADIO_VOLTAGE_SCALE);
     tx_message.telemetry.qR = Radio::floatToFixed(t.qR, Radio::RADIO_QUAT_SCALE);
     tx_message.telemetry.qI = Radio::floatToFixed(t.qI, Radio::RADIO_QUAT_SCALE);
     tx_message.telemetry.qJ = Radio::floatToFixed(t.qJ, Radio::RADIO_QUAT_SCALE);
