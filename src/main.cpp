@@ -23,6 +23,8 @@ void loop() {
     USB::update();
     Gyro::update();
     Battery::update();
+    Drone::serviceWatchdog(); // Runs the failsafe before the LEDs report it
+    Drone::updateLEDS();
 
     // Telemetry. The control ISR records a snapshot every tick; sending it is
     // loop()'s job, because pushing to the radio and USB tx queues is not

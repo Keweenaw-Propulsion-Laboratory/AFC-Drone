@@ -10,10 +10,12 @@ optionally, observes or communicates through the RFM69 radio.
 | --- | --- | --- | --- |
 | USB | Dashboard → drone | `COMMAND` | Implemented; no acknowledgement is sent. |
 | USB | Dashboard → drone | `CONFIG` `SET` / `READ` | Implemented. |
+| USB | Dashboard → drone | `HEARTBEAT` | Implemented; feeds the link watchdog and carries the requested state. |
 | USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; `voltage` is still a placeholder. |
 | USB | Drone → dashboard | `DEBUG_TEXT` | Implemented. |
 | USB | Drone → dashboard | `RADIO_PACKET` relay | Implemented for sent and received RFM69 packets. |
 | RFM69 | Ground station → drone | `COMMAND` | Implemented. |
+| RFM69 | Ground station → drone | `HEARTBEAT` | Implemented; feeds the link watchdog and carries the requested state. |
 | RFM69 | Drone → ground station | `STATUS0`–`STATUS6` | Implemented at approximately 10 Hz; types 3–6 (quaternion, acceleration, velocity, position) now carry live Gyro data. |
 | RFM69 | Ground station → drone | `CONFIG` | Partially implemented; see [Radio configuration limitations](#radio-configuration-limitations). |
 
@@ -55,9 +57,14 @@ numbers are validated; the firmware currently does not enforce them.
 | 3 | `TELEMETRY` | Drone → dashboard | 54-byte combined telemetry record. |
 | 4 | `COMMAND` | Dashboard → drone | Exactly 8 payload bytes. |
 | 5 | `CONFIG` | Both | Configuration requests and responses. |
+| 10 | `HEARTBEAT` | Dashboard → drone | Exactly 8 payload bytes. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat). |
 
-The USB receive parser only accepts inbound `COMMAND` and `CONFIG` frames.
-Other type values are discarded before their payload is read.
+The USB receive parser only accepts inbound `COMMAND`, `CONFIG`, `HEARTBEAT`,
+and `RAW` frames; other type values are discarded before their payload is read,
+and an accepted `RAW` frame is then dropped by the dispatcher. A `HEARTBEAT`
+frame whose payload length is not exactly 8 is rejected by the header check and
+never reaches the watchdog, so a malformed heartbeat will let the link time
+out rather than reporting an error.
 
 ### `COMMAND` request (type 4)
 
@@ -171,7 +178,8 @@ Configuration keys and values:
 
 `ConfigResult` values are: `OK = 0`, `INVALID_VALUE = 1`, `INVALID_KEY = 2`,
 `UNSAFE_STATE = 3`, `UNKNOWN_VERSION = 4`, and `UNKNOWN_OP = 5`. Changes are
-rejected with `UNSAFE_STATE` while the drone is in `FLIGHT`.
+rejected with `UNSAFE_STATE` while the drone is in `MAN_FLIGHT` or
+`AUTO_FLIGHT`.
 
 ## RFM69 radio protocol
 
@@ -202,6 +210,7 @@ user-facing setting.
 | 7 | `STATUS6` | Position record |
 | 8 | `COMMAND` | Same 8-byte command layout as USB |
 | 9 | `CONFIG` | One configuration request/response |
+| 10 | `HEARTBEAT` | Link keepalive and requested state. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat). |
 
 The flight loop queues status types 1–7 every 100 ms. The radio transmitter
 sends no more than one queued packet per 10 ms receive window, so individual
@@ -211,7 +220,7 @@ status packets can arrive later than the 100 ms telemetry tick.
 
 | Type | Byte layout | Current behavior |
 | --- | --- | --- |
-| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 currentMode`, `uint8 reserved` | Live fields. `currentMode` is at offset 6; RSSI moved to `STATUS2`. |
+| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 currentMode`, `uint8 watchDog` | `currentMode` is at offset 6; RSSI moved to `STATUS2`. `watchDog` is reserved for link watchdog status and is currently always `0` - do not decode it. |
 | `STATUS1` | `int16 gimbalPitchNorm`, `int16 gimbalYawNorm`, `uint16 topServoSet`, `uint16 bottomServoSet` | Live fields. |
 | `STATUS2` | `uint16 motor1set`, `uint16 motor2set`, `uint16 voltage`, `uint16 rssi` | Motor values live; voltage is `0`. `rssi` carries the signed RFM69 RSSI in a `uint16` - reinterpret as `int16`. |
 | `STATUS3` | Four `int16` quaternion fields: `qR`, `qI`, `qJ`, `qK` | Drone-body-frame orientation, fixed-point ×32767. |
@@ -255,17 +264,110 @@ A dashboard may display mirrored radio configuration traffic, but should use
 the USB `CONFIG` endpoint for configuration controls until these issues are
 resolved.
 
+## Link watchdog and heartbeat
+
+The drone requires a periodic `HEARTBEAT` to keep moving. The same message also
+carries the state the dashboard is asking for, so the heartbeat is both the
+keepalive and the mode control channel. It is accepted over USB (type 10) and
+RFM69 (type 10) with an identical 8-byte payload.
+
+### `HEARTBEAT` payload
+
+| Offset | Type | Field | Meaning |
+| ---: | --- | --- | --- |
+| 0 | `uint8` | `state` | Requested drone state. See [Drone states](#drone-states). |
+| 1 | bit 0 | `enableMotors` | Defined in the wire format but not yet read by the firmware. Send zero. |
+| 1 | bit 1 | `enableGimbal` | Defined in the wire format but not yet read by the firmware. Send zero. |
+| 1–7 | remaining 54 bits | reserved | Send zero. |
+
+### Cadence
+
+The watchdog expires **100 ms** after the last heartbeat. Send heartbeats well
+inside that - 20–50 ms is a reasonable dashboard cadence, which tolerates one
+or two lost packets before a trip.
+
+Only `HEARTBEAT` feeds the watchdog. A dashboard that streams `COMMAND` packets
+without heartbeats will be treated as a dead link and disarmed, however fresh
+its commands are.
+
+### What expiry does
+
+1. Every actuator guard fails closed within one 1 kHz control tick: motors are
+   driven to their idle pulse width and servo writes are suppressed.
+2. The drone transitions to `SAFE` and latches an internal trip flag.
+3. The status LED switches to a distinctive three-flash-then-pause pattern, and
+   a `DEBUG_TEXT` message reading `DRONE: COMM WATCHDOG EXPIRED -> SAFE` is
+   emitted.
+
+The trip flag is not yet exposed in telemetry. Until it is, detect the event
+from the `currentMode` transition to `SAFE` and from the `DEBUG_TEXT` string.
+
+Expiry is only evaluated at or above `READY_ARMED`. Before then, no heartbeat
+has been asked for and a cold watchdog is not a fault.
+
+### Requested state is edge triggered
+
+**This is the rule most likely to surprise a dashboard implementation.** The
+firmware acts on `state` only when it **changes** from the previously accepted
+request. A heartbeat that repeats the last requested state is treated as a
+keepalive and nothing else.
+
+The reason is that a heartbeat sent before a dropout is byte-identical to one
+sent after it. If repeats were honored, a dashboard that reconnects and resumes
+sending its last mode would silently re-arm the vehicle the instant the link
+came back, with no operator in the decision. Acting only on a change makes
+re-arming require a deliberate action.
+
+The consequence for a dashboard is a required behavior change:
+
+- **On link loss, set the requested state back to `SAFE`.** Keep sending
+  heartbeats requesting `SAFE` while the link is down or reconnecting.
+- **To resume, request the flight state again.** That `SAFE` → flight
+  transition is the edge the firmware honors, and it is also what clears the
+  latched trip indication.
+
+A dashboard that instead keeps asserting its pre-dropout flight state after a
+trip will find the vehicle stays in `SAFE` indefinitely, with no error
+response - the request is silently ignored because it is not a change.
+
+### Escalation dwell
+
+An escalation out of `SAFE` is additionally refused until the vehicle has been
+in `SAFE` for **500 ms**. This stops an automatic reconnect from walking
+through `SAFE` and back into flight faster than an operator could intervene.
+
+The refusal does not consume the request: a dashboard that holds its new
+requested state will have it honored automatically on the next heartbeat once
+the dwell has passed. No second operator action is needed.
+
+### Current failsafe behavior
+
+`SAFE` zeroes the motors. This is correct for the current bench and tethered
+configuration, but a dashboard should not present it as a recoverable-in-flight
+failsafe: it is a disarm. A distinct link-loss flight mode is planned, and this
+section will change when it lands.
+
 ## Drone states
+
+State values are **not contiguous**. Do not index an array by them, and treat
+any unlisted value as unknown rather than clamping it.
 
 | Value | State | Dashboard interpretation |
 | ---: | --- | --- |
 | 0 | `BOOT` | Initial hardware setup. |
 | 1 | `RADIO_SETUP` | Radio initialization/handshake. |
 | 2 | `SENSOR_SETUP` | IMU and sensor initialization. |
-| 3 | `CONTROL_SETUP` | Gimbal and motor setup. |
-| 4 | `READY_ARMED` | Startup is complete; display prominently. |
-| 5 | `FLIGHT` | Active flight state; persistent configuration writes are rejected. |
-| 6 | `FAULT_ERROR` | Fault state. |
+| 3 | `CONTROL_SETUP` | Gimbal, motor, and control timer setup. |
+| 4 | `SAFE` | Startup is complete and all systems are up, but no movement is allowed. This is the state a watchdog trip drops the vehicle into. |
+| 10 | `READY_ARMED` | Gimbal movement allowed; motors stay at idle. |
+| 11 | `MAN_FLIGHT` | Manually commanded motors and gimbal. Persistent configuration writes are rejected. |
+| 12 | `AUTO_FLIGHT` | Flight-control-driven motors and gimbal. Persistent configuration writes are rejected. **Not implemented** - a request for it is refused. |
+| 255 | `FAULT_ERROR` | Unrecoverable fault. The firmware will not leave this state; a power cycle is required. A link-loss trip never routes here. |
+
+The ordering is significant to the firmware: everything at or above
+`READY_ARMED` (10) permits some movement and is watchdog-policed, and
+everything below `SAFE` (4) is startup. A dashboard can use the same
+comparison to decide when to show flight-critical indicators.
 
 ## Dashboard implementation guidance
 
