@@ -358,6 +358,11 @@ void sendStatus0(const Drone::Telemetry_t& t) {
     msg.status0.loopTimeMax = t.loopTimeMax;
     msg.status0.RunTime = t.runtimeSec;
     msg.status0.currentMode = (uint8_t) t.state;
+    // Watchdog state is owned by loop() context, not the control tick, so it is
+    // read live here rather than coming from the snapshot - same as RSSI and
+    // battery voltage in the other status frames.
+    msg.status0.watchDog = packWatchdogFlags(Drone::getFlightWatchdogStatus(),
+                                             Drone::getWatchdogTripped());
 
     sendMessage( msg, MessageType::STATUS0);
 }

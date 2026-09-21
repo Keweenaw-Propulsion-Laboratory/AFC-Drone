@@ -526,12 +526,15 @@ Getting one wrong produces telemetry that is silently, plausibly wrong.
 
   A `static_assert` turns a silent protocol break into a compile error. Add one
   for every new wire struct.
-- Radio payloads are **exactly 8 bytes**. USB payloads are at most **60 bytes**.
-  Pad with an explicit `empty` field rather than leaving slack.
+- Radio payloads are **exactly 8 bytes**. USB payloads are at most **64 bytes**.
+  Pad with an explicit `empty` or `reserved` field rather than leaving slack.
+- Append new fields to the **end** of an existing wire struct, into its reserved
+  tail. Dashboards decode by offset, so inserting a field anywhere else shifts
+  every field above it.
 - Changing an existing wire struct is a **breaking change**. Update
-  [docs/dashboard-protocol.md](dashboard-protocol.md) and
-  [Radio_API.md](../Radio_API.md) in the same pull request, and say so in the PR
-  description so the ground-station software is updated in step.
+  [docs/dashboard-protocol.md](dashboard-protocol.md) in the same pull request,
+  and say so in the PR description so the ground-station software is updated in
+  step.
 
 ---
 

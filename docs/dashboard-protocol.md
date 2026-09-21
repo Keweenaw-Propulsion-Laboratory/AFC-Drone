@@ -11,7 +11,7 @@ optionally, observes or communicates through the RFM69 radio.
 | USB | Dashboard → drone | `COMMAND` | Implemented; no acknowledgement is sent. |
 | USB | Dashboard → drone | `CONFIG` `SET` / `READ` | Implemented. |
 | USB | Dashboard → drone | `HEARTBEAT` | Implemented; feeds the link watchdog and carries the requested state. |
-| USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; `voltage` is still a placeholder. |
+| USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; `voltage` is still a placeholder. Record is 64 bytes as of the watchdog field. |
 | USB | Drone → dashboard | `DEBUG_TEXT` | Implemented. |
 | USB | Drone → dashboard | `RADIO_PACKET` relay | Implemented for sent and received RFM69 packets. |
 | RFM69 | Ground station → drone | `COMMAND` | Implemented. |
@@ -34,7 +34,7 @@ USB uses a byte stream with this frame layout:
 | 2 | 1 | Protocol version (`1`) |
 | 3 | 2 | Packet sequence number, `uint16` little-endian |
 | 5 | 1 | Message type |
-| 6 | 1 | Payload length, `0`–`60` |
+| 6 | 1 | Payload length, `0`–`64` |
 | 7 | `length` | Payload |
 | 7 + `length` | 2 | CRC-16/CCITT-FALSE, little-endian |
 
@@ -54,7 +54,7 @@ numbers are validated; the firmware currently does not enforce them.
 | 0 | `RAW` | None | Defined but not accepted or emitted by current firmware. |
 | 1 | `DEBUG_TEXT` | Drone → dashboard | UTF-8/ASCII text bytes; no terminating NUL. |
 | 2 | `RADIO_PACKET` | Drone → dashboard | RFM69 packet mirror. |
-| 3 | `TELEMETRY` | Drone → dashboard | 54-byte combined telemetry record. |
+| 3 | `TELEMETRY` | Drone → dashboard | 64-byte combined telemetry record. |
 | 4 | `COMMAND` | Dashboard → drone | Exactly 8 payload bytes. |
 | 5 | `CONFIG` | Both | Configuration requests and responses. |
 | 10 | `HEARTBEAT` | Dashboard → drone | Exactly 8 payload bytes. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat). |
@@ -90,7 +90,12 @@ unexpected type-5 response after sending a command.
 
 ### `TELEMETRY` event (type 3)
 
-The drone sends this 54-byte record every 100 ms while the main loop runs.
+The drone sends this 64-byte record every 100 ms while the main loop runs.
+
+**Breaking change:** this record grew from 54 to 64 bytes when the watchdog
+field was added. Existing field offsets are unchanged, so a decoder that reads
+by offset and ignores trailing bytes keeps working, but any decoder that
+asserts a 54-byte payload length must be updated.
 
 | Offset | Type | Field | Dashboard meaning | Current source |
 | ---: | --- | --- | --- | --- |
@@ -112,10 +117,12 @@ The drone sends this 54-byte record every 100 ms while the main loop runs.
 | 40 | `int16` × 3 | `posX`, `posY`, `posZ` | Position | Gyro dead-reckoned position, fixed-point ×100 (m → cm) |
 | 46 | `float` | `latitude` | Latitude | Fixed test value currently |
 | 50 | `float` | `longitude` | Longitude | Fixed test value currently |
+| 54 | `uint8` | `watchDog` | Link watchdog flags | Live; see [Link watchdog and heartbeat](#link-watchdog-and-heartbeat) |
+| 55 | 9 bytes | reserved | Unused | Transmitted as zero; ignore |
 
 ### `DEBUG_TEXT` event (type 1)
 
-Payload is an arbitrary text fragment of 1–60 bytes. Messages longer than 60
+Payload is an arbitrary text fragment of 1–64 bytes. Messages longer than 64
 bytes are split into independent frames. Treat payload as display text, not as
 a machine-stable event API.
 
@@ -220,7 +227,7 @@ status packets can arrive later than the 100 ms telemetry tick.
 
 | Type | Byte layout | Current behavior |
 | --- | --- | --- |
-| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 currentMode`, `uint8 watchDog` | `currentMode` is at offset 6; RSSI moved to `STATUS2`. `watchDog` is reserved for link watchdog status and is currently always `0` - do not decode it. |
+| `STATUS0` | `uint16 loopTimeAvg`, `uint16 loopTimeMax`, `uint16 runTime`, `uint8 currentMode`, `uint8 watchDog` | Live fields. `currentMode` is at offset 6, `watchDog` at offset 7; RSSI moved to `STATUS2`. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat) for the `watchDog` bits. |
 | `STATUS1` | `int16 gimbalPitchNorm`, `int16 gimbalYawNorm`, `uint16 topServoSet`, `uint16 bottomServoSet` | Live fields. |
 | `STATUS2` | `uint16 motor1set`, `uint16 motor2set`, `uint16 voltage`, `uint16 rssi` | Motor values live; voltage is `0`. `rssi` carries the signed RFM69 RSSI in a `uint16` - reinterpret as `int16`. |
 | `STATUS3` | Four `int16` quaternion fields: `qR`, `qI`, `qJ`, `qK` | Drone-body-frame orientation, fixed-point ×32767. |
@@ -295,12 +302,35 @@ its commands are.
 1. Every actuator guard fails closed within one 1 kHz control tick: motors are
    driven to their idle pulse width and servo writes are suppressed.
 2. The drone transitions to `SAFE` and latches an internal trip flag.
-3. The status LED switches to a distinctive three-flash-then-pause pattern, and
-   a `DEBUG_TEXT` message reading `DRONE: COMM WATCHDOG EXPIRED -> SAFE` is
-   emitted.
+3. The `TRIPPED` bit of the `watchDog` telemetry byte latches, the status LED
+   switches to a distinctive three-flash-then-pause pattern, and a `DEBUG_TEXT`
+   message reading `DRONE: COMM WATCHDOG EXPIRED -> SAFE` is emitted.
 
-The trip flag is not yet exposed in telemetry. Until it is, detect the event
-from the `currentMode` transition to `SAFE` and from the `DEBUG_TEXT` string.
+### Detecting a trip
+
+Both transports carry a `watchDog` flags byte: USB telemetry offset 54, RFM69
+`STATUS0` offset 7. Identical encoding on both.
+
+| Bit | Name | Meaning |
+| ---: | --- | --- |
+| 0 | `FED` | The watchdog is currently fed - a heartbeat arrived within the last 100 ms. Live state; it clears and sets on its own as the link comes and goes. |
+| 1 | `TRIPPED` | The watchdog expired somewhere movement was allowed. **Latched**: set at the moment of expiry and cleared only when the dashboard releases its requested state to `SAFE`. |
+| 2–7 | reserved | Zero. |
+
+`TRIPPED` is the flag to drive a dashboard alert from. It is latched precisely
+so the event survives the outage that caused it: over the radio nothing reaches
+the ground station while the link is down, so by the time packets flow again
+the `currentMode` transition and the `DEBUG_TEXT` message have already been and
+gone. A dashboard that connects after a trip still sees `TRIPPED` set.
+
+`FED` is useful on its own as a link-health indicator - it shows the watchdog
+is being satisfied before a trip happens, which `currentMode` cannot.
+
+Two weaker signals remain available, but neither should be the primary
+mechanism. `currentMode` transitioning to `SAFE` cannot distinguish a trip from
+a commanded disarm. The `DEBUG_TEXT` message `DRONE: COMM WATCHDOG EXPIRED ->
+SAFE` is USB-only, is emitted once per trip, and is display text rather than a
+stable event API.
 
 Expiry is only evaluated at or above `READY_ARMED`. Before then, no heartbeat
 has been asked for and a cold watchdog is not a fault.

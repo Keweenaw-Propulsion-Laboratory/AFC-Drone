@@ -74,12 +74,38 @@ namespace Radio {
         /**
          * General status messages
          */
+        /**
+         * Bit flags for the `watchDog` byte carried by StatusMsg0_t and by the
+         * USB telemetry record.
+         *
+         * FED is the live state of the comm watchdog and flips back on its own
+         * as soon as heartbeats resume. TRIPPED is latched by the firmware when
+         * the watchdog expires somewhere movement was allowed, and is cleared
+         * only when the dashboard releases its requested state back to SAFE.
+         *
+         * The latch is the field that matters after a radio dropout: nothing
+         * reaches the ground station while the link is down, so by the time
+         * packets flow again the state change and the debug text have already
+         * been and gone. TRIPPED is what is still true.
+         */
+        static constexpr uint8_t WATCHDOG_FED = 1 << 0;
+        static constexpr uint8_t WATCHDOG_TRIPPED = 1 << 1;
+
+        /**
+         * Packs the watchdog flags. Both transports send the same byte, so the
+         * encoding is defined once here rather than per sender.
+         */
+        inline uint8_t packWatchdogFlags(bool fed, bool tripped) {
+            return static_cast<uint8_t>((fed ? WATCHDOG_FED : 0) |
+                                        (tripped ? WATCHDOG_TRIPPED : 0));
+        }
+
         struct __attribute__((packed)) StatusMsg0_t {
             uint16_t loopTimeAvg; // Average loop time in micros
             uint16_t loopTimeMax; // Max loop time in micros
             uint16_t RunTime; // Time that the vehicle has been powered on in seconds
             uint8_t currentMode; // The current mode that the vehicle is in. 
-            uint8_t watchDog; // Is watchdog enabled
+            uint8_t watchDog; // Comm watchdog flags, see WATCHDOG_FED/WATCHDOG_TRIPPED
         };
 
         struct __attribute__((packed)) StatusMsg1_t {

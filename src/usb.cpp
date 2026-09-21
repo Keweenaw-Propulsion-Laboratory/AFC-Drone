@@ -21,7 +21,7 @@ namespace USB {
 // payload, CRC-16/CCITT-FALSE (little-endian). CRC excludes the sync bytes.
 constexpr uint8_t USB_PROTOCOL_VERSION = 1;
 
-static constexpr uint8_t MAX_DATA_LEN = 60; /** Max usb data length */
+static constexpr uint8_t MAX_DATA_LEN = 64; /** Max usb data length */
 static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
 static constexpr size_t USB_FRAME_OVERHEAD = 2 + 1 + 4 + 2;
@@ -100,8 +100,19 @@ struct __attribute__((packed)) Telemetry {
     // Status 7
     float latitude;
     float longitude;
-    // 50 / 60 bytes used
+    // Watchdog
+    uint8_t watchDog; // Comm watchdog flags, see Radio::WATCHDOG_FED/TRIPPED
 
+    /**
+     * Pads the record to a round 64 bytes.
+     *
+     * New fields are appended here, taking bytes from the front of this array,
+     * because every existing field's offset is part of the wire format that
+     * dashboards decode by offset. Inserting anywhere else shifts all of them.
+     * Senders must zero-initialize the payload so these bytes go out as 0.
+     */
+    uint8_t reserved[9];
+    // 64 / 64 bytes used
 };
 
 struct __attribute__((packed)) Config {
@@ -193,13 +204,16 @@ struct __attribute__((packed)) packet_t {
     packet_t(int = 0) : header{0, (MessageTypes) 0, 0} {}
 };
 
-static_assert(sizeof(packet_t) <= 64, "USB packets must be 64 bytes or less");
+static_assert(sizeof(packet_t) <= 4 + MAX_DATA_LEN, "USB packets must fit a header plus a full payload");
 static_assert(sizeof(Command) == 8, "USB command wire size changed");
-static_assert(sizeof(Telemetry) <= MAX_DATA_LEN, "Telemetry exceeds USB payload limit");
+static_assert(sizeof(Telemetry) == 64, "USB telemetry wire size changed");
 static_assert(sizeof(radio_packet_t) == 11, "USB radio relay wire size changed");
-static_assert(sizeof(Config) == MAX_DATA_LEN, "USB config request layout changed");
+// Config and ConfigReadResponse are frozen at the 60 bytes every dashboard
+// already parses. They filled the payload exactly when the ceiling was 60, so
+// they are pinned to a literal rather than tracking MAX_DATA_LEN.
+static_assert(sizeof(Config) == 60, "USB config request layout changed");
 static_assert(sizeof(ConfigResponse) == 31, "USB config response layout changed");
-static_assert(sizeof(ConfigReadResponse) == MAX_DATA_LEN,
+static_assert(sizeof(ConfigReadResponse) == 60,
               "USB config read response layout changed");
 
 
@@ -456,7 +470,9 @@ void sendText(const char* message, int length) {
 }
 
 void sendTelemetry(const Drone::Telemetry_t& t) {
-    Message tx_message;
+    // Zero initialized so the reserved tail of the record goes out as 0 rather
+    // than whatever was on the stack.
+    Message tx_message{};
 
     tx_message.telemetry.loopTimeAvg = t.loopTimeAvg;
     tx_message.telemetry.loopTimeMax = t.loopTimeMax;
@@ -487,6 +503,12 @@ void sendTelemetry(const Drone::Telemetry_t& t) {
     tx_message.telemetry.posZ = Radio::floatToFixed(t.posZ, Radio::RADIO_POS_SCALE);
     tx_message.telemetry.latitude = 47.119643352372485f;
     tx_message.telemetry.longitude = -88.549229750287f;
+    // Watchdog state is owned by loop() context, not the control tick, so it is
+    // read live here rather than coming from the snapshot - same as RSSI and
+    // battery voltage above.
+    tx_message.telemetry.watchDog =
+        Radio::packWatchdogFlags(Drone::getFlightWatchdogStatus(),
+                                 Drone::getWatchdogTripped());
 
     send(tx_message, MessageTypes::TELEMETRY, sizeof(Telemetry));
 }
