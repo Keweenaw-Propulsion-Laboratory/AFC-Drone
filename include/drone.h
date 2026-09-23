@@ -13,13 +13,16 @@ namespace Drone {
     };
 
     enum class States: uint8_t {
-        BOOT, 
-        RADIO_SETUP,  
-        SENSOR_SETUP,
-        CONTROL_SETUP,
-        READY_ARMED,
-        FLIGHT,
-        FAULT_ERROR
+        BOOT = 0, 
+        RADIO_SETUP = 1,  
+        SENSOR_SETUP = 2,
+        CONTROL_SETUP = 3,
+        SAFE = 4, /** No movement allowed but all systems go */ 
+        READY_ARMED = 10, /** Gimbal movement allowed */
+        MAN_FLIGHT = 11, /** Manual motors and gimbal */
+        AUTO_FLIGHT = 12, /**Flight control driven motors and gimbal */ 
+        FAULT_ERROR = 255, /**Unrecoverable Error has occured */
+
     };
 
     /**
@@ -111,5 +114,92 @@ namespace Drone {
      */
      void update();
 
+    /**
+     * @brief Drives the status LED with the pattern for the current state.
+     *
+     * Call this once per pass through loop(): the patterns are built from
+     * millis() and a little bit of internal state, so they only advance when
+     * this is called. The pattern is picked from Drone::getState():
+     *
+     * - RADIO_SETUP  - 100 ms blink
+     * - SENSOR_SETUP - 300 ms blink
+     * - SAFE         - 2 s sine "breathe" fade (hardware PWM)
+     * - READY_ARMED  - 500 ms blink
+     * - MAN_FLIGHT / AUTO_FLIGHT - repeating double strobe
+     * - FAULT_ERROR  - 50 ms panic blink
+     * - anything else - 500 ms blink
+     *
+     * @warning STATUS_LED must already be configured as an output. That
+     * happens in the BOOT stage of startup(), so nothing should call this
+     * before startup() has run at least once.
+     *
+     * @warning Not interrupt safe - the SAFE fade reconfigures STATUS_LED
+     * through analogWrite()/pinMode(). Keep it out of update() and anything
+     * else running in interrupt context.
+     */
+    void updateLEDS();
+    
+    /**
+     * @brief Checks the status of the flight watchdog timmer.
+     * 
+     * If the watchdog has expired then movement is assumed to be prohibited.
+     * All physical mechanisms on the vehicle should use this gaurd to 
+     * prevent unauthorized movement in the case of a communication failure. 
+     * 
+     * @returns Will return true if the watchdog is still alive.
+     * Will return false if the watchdog has expired. 
+     */
+    bool getFlightWatchdogStatus();
+
+    /**
+     * Feeds the flight watchdog
+     * 
+     * @related bool getFlightWatchdogStatus()
+     */
+    void feedFlightWatchdog();
+
+    /**
+     * @brief Polls the flight watchdog and runs the failsafe if it has expired.
+     *
+     * Call once per pass through loop(). The per-actuator guards on
+     * getFlightWatchdogStatus() freeze outputs within a control tick and are
+     * the safety critical path; this is the bookkeeping that goes with them,
+     * dropping the vehicle into SAFE and latching the trip indication so the
+     * vehicle does not sit in MAN_FLIGHT with a dead link and a flight LED
+     * pattern.
+     *
+     * Does nothing below READY_ARMED: no heartbeat has been asked for yet, so
+     * a watchdog that has never been fed is not a fault.
+     */
+    void serviceWatchdog();
+
+    /**
+     * @brief Handles one heartbeat from a link: feeds the watchdog and applies
+     * the requested state.
+     *
+     * The single entry point for both transports, so the rules below live in
+     * one place rather than being duplicated per link.
+     *
+     * Feeding is unconditional - the packet arrived, so the link is alive. The
+     * state request is EDGE triggered: the dashboard re-asserts its mode in
+     * every heartbeat, and a heartbeat sent before a dropout is byte identical
+     * to one sent after, so a repeat cannot be an operator action. Only a
+     * change is honored. After a watchdog trip has forced SAFE, the
+     * dashboard's unchanged flight request is therefore ignored until it
+     * releases to SAFE and asks again - one deliberate operator action, which
+     * is also what clears the trip indication.
+     *
+     * @param requested The state the link is asking for.
+     */
+    void heartbeat(States requested);
+
+    /**
+     * @returns True if the watchdog has expired in a state that allowed
+     * movement and has not been acknowledged since. Latched - a link that
+     * comes back does not clear it, only a release to SAFE does.
+     */
+    bool getWatchdogTripped();
+
+    bool requestState(States state);
 
 };

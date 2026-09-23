@@ -9,6 +9,7 @@
 #include "battery.h"
 
 void setup() {
+    USB::setup();    // Bring up the serial link before anything reports on it
     Configs::load(); // Load configs from flash
 
     while (!Drone::startup()) {}
@@ -22,6 +23,8 @@ void loop() {
     USB::update();
     Gyro::update();
     Battery::update();
+    Drone::serviceWatchdog(); // Runs the failsafe before the LEDs report it
+    Drone::updateLEDS();
 
     // Telemetry. The control ISR records a snapshot every tick; sending it is
     // loop()'s job, because pushing to the radio and USB tx queues is not

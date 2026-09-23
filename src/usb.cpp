@@ -21,10 +21,27 @@ namespace USB {
 // payload, CRC-16/CCITT-FALSE (little-endian). CRC excludes the sync bytes.
 constexpr uint8_t USB_PROTOCOL_VERSION = 1;
 
-static constexpr uint8_t MAX_DATA_LEN = 60; /** Max usb data length */
+static constexpr uint8_t MAX_DATA_LEN = 64; /** Max usb data length */
 static constexpr uint8_t USB_SYNC_0 = 0xA5;
 static constexpr uint8_t USB_SYNC_1 = 0x5A;
 static constexpr size_t USB_FRAME_OVERHEAD = 2 + 1 + 4 + 2;
+
+/**
+ * The tx path in update() only pops a packet once the port reports room for
+ * the whole frame. On a core whose Serial is a ring buffer that check has a
+ * ceiling: availableForWrite() can never exceed SERIAL_TX_BUFFER_SIZE - 1,
+ * even with the buffer completely empty. A frame larger than that ceiling
+ * therefore never satisfies the condition, is never popped, and blocks every
+ * packet queued behind it - permanently, since the head is what gets peeked.
+ *
+ * Teensy's Serial is USB CDC and defines no such macro, so this is skipped
+ * there; it fires only on cores where the limit is real.
+ */
+#if defined(SERIAL_TX_BUFFER_SIZE)
+static_assert(USB_FRAME_OVERHEAD + MAX_DATA_LEN <= SERIAL_TX_BUFFER_SIZE - 1,
+              "Serial tx buffer is too small for the largest USB frame; the tx "
+              "queue would deadlock on the first oversized packet");
+#endif
 
 // Identify handshake: the dashboard sends RAW+IDENTIFY_QUERY_BYTE on every
 // fresh connection to tell a direct-wired drone apart from a base station
@@ -83,8 +100,19 @@ struct __attribute__((packed)) Telemetry {
     // Status 7
     float latitude;
     float longitude;
-    // 50 / 60 bytes used
+    // Watchdog
+    uint8_t watchDog; // Comm watchdog flags, see Radio::WATCHDOG_FED/TRIPPED
 
+    /**
+     * Pads the record to a round 64 bytes.
+     *
+     * New fields are appended here, taking bytes from the front of this array,
+     * because every existing field's offset is part of the wire format that
+     * dashboards decode by offset. Inserting anywhere else shifts all of them.
+     * Senders must zero-initialize the payload so these bytes go out as 0.
+     */
+    uint8_t reserved[9];
+    // 64 / 64 bytes used
 };
 
 struct __attribute__((packed)) Config {
@@ -147,6 +175,7 @@ union __attribute__((packed)) Message {
     ConfigResponse configResponse;
     ConfigReadResponse configReadResponse;
     Radio::Message radio_message;
+    Radio::HeartbeatPacket heartbeat;
     
 };
 
@@ -175,23 +204,35 @@ struct __attribute__((packed)) packet_t {
     packet_t(int = 0) : header{0, (MessageTypes) 0, 0} {}
 };
 
-static_assert(sizeof(packet_t) <= 64, "USB packets must be 64 bytes or less");
+static_assert(sizeof(packet_t) <= 4 + MAX_DATA_LEN, "USB packets must fit a header plus a full payload");
 static_assert(sizeof(Command) == 8, "USB command wire size changed");
-static_assert(sizeof(Telemetry) <= MAX_DATA_LEN, "Telemetry exceeds USB payload limit");
+static_assert(sizeof(Telemetry) == 64, "USB telemetry wire size changed");
 static_assert(sizeof(radio_packet_t) == 11, "USB radio relay wire size changed");
-static_assert(sizeof(Config) == MAX_DATA_LEN, "USB config request layout changed");
+// Config and ConfigReadResponse are frozen at the 60 bytes every dashboard
+// already parses. They filled the payload exactly when the ceiling was 60, so
+// they are pinned to a literal rather than tracking MAX_DATA_LEN.
+static_assert(sizeof(Config) == 60, "USB config request layout changed");
 static_assert(sizeof(ConfigResponse) == 31, "USB config response layout changed");
-static_assert(sizeof(ConfigReadResponse) == MAX_DATA_LEN,
+static_assert(sizeof(ConfigReadResponse) == 60,
               "USB config read response layout changed");
 
 
 
 
 
-static Circular_Buffer<packet_t, 16> txBuffer;
-static Circular_Buffer<packet_t, 16> rxBuffer;
+static constexpr uint8_t TX_DEPTH = 16;
+static constexpr uint8_t RX_DEPTH = 16;
+
+static Circular_Buffer<packet_t, TX_DEPTH> txBuffer;
+static Circular_Buffer<packet_t, RX_DEPTH> rxBuffer;
 
 static uint16_t globalPacketNumber = 0;
+
+/** Frames displaced from a full tx queue. Counted, not silently lost. */
+static uint16_t txDropped = 0;
+
+/** Frames displaced from a full rx queue. Counted, not silently lost. */
+static uint16_t rxDropped = 0;
 
 static void handleConfig(const Message& msg, uint8_t packetLength);
 static void send(Message data, MessageTypes type, int length);
@@ -226,11 +267,27 @@ static bool isValidRxHeader(const header_t& header) {
         return header.packetLength == 1;
     }
 
+    if (header.type == MessageTypes::HEARTBEAT) {
+        return header.packetLength == 8;
+    }
+
     return header.type == MessageTypes::CONFIG &&
            header.packetLength >= 3 && header.packetLength <= 57;
 }
 
 
+
+/**
+ * Baud rate for targets where the link is a real UART. Ignored by the Teensy's
+ * native USB CDC, which always runs at full USB speed.
+ */
+#ifndef USB_BAUD
+#define USB_BAUD 115200
+#endif
+
+void setup() {
+    Serial.begin(USB_BAUD);
+}
 
 /**
  * Periodic USB function
@@ -294,7 +351,17 @@ void update() {
             crc_bytes[1] = newByte;
             const uint16_t received_crc = static_cast<uint16_t>(crc_bytes[0]) |
                                           (static_cast<uint16_t>(crc_bytes[1]) << 8);
-            if (received_crc == packetCrc(temp_rx_pkt) && rxBuffer.size() < 16) {
+            if (received_crc == packetCrc(temp_rx_pkt)) {
+                // Same drop-oldest policy as the tx queue. The rx queue only
+                // backs up when loop() is not draining it, and what is sitting
+                // in it then is a stale setpoint or an already-superseded
+                // heartbeat. Refusing the new frame - which this used to do -
+                // meant the freshest command was the one thrown away, and a
+                // full queue locked the drone onto whatever it held until
+                // loop() caught up. push_back() overwrites the oldest entry.
+                if (rxBuffer.size() >= RX_DEPTH) {
+                    rxDropped++;
+                }
                 rxBuffer.push_back(temp_rx_pkt);
             }
             rx_state = RxState::FIND_SYNC_0;
@@ -361,6 +428,12 @@ void update() {
 
             break;
         
+        case MessageTypes::HEARTBEAT:
+            // Feeds the watchdog and applies the requested state. The request
+            // is only acted on when it CHANGES - see Drone::heartbeat().
+            Drone::heartbeat(pkt.data.heartbeat.state);
+            break;
+
         default:
             break;
         }
@@ -368,9 +441,19 @@ void update() {
 }
 
 static void send(Message data, MessageTypes type, int length) {
-    if (length < 0 || length > MAX_DATA_LEN || txBuffer.size() >= 16) {
+    if (length < 0 || length > MAX_DATA_LEN) {
         return;
     }
+
+    // Same policy as Radio::sendMessage(): when the queue is full,
+    // Circular_Buffer::push_back() overwrites the oldest entry and the newest
+    // frame is kept. Refusing the new one instead - which this used to do -
+    // meant a backed-up link served the dashboard progressively staler
+    // telemetry and dropped exactly the frame it most needed.
+    if (txBuffer.size() >= TX_DEPTH) {
+        txDropped++;
+    }
+
     header_t header {globalPacketNumber++, type, (uint8_t) length};
     packet_t packet;
 
@@ -416,7 +499,9 @@ void sendText(const char* message, int length) {
 }
 
 void sendTelemetry(const Drone::Telemetry_t& t) {
-    Message tx_message;
+    // Zero initialized so the reserved tail of the record goes out as 0 rather
+    // than whatever was on the stack.
+    Message tx_message{};
 
     tx_message.telemetry.loopTimeAvg = t.loopTimeAvg;
     tx_message.telemetry.loopTimeMax = t.loopTimeMax;
@@ -447,6 +532,12 @@ void sendTelemetry(const Drone::Telemetry_t& t) {
     tx_message.telemetry.posZ = Radio::floatToFixed(t.posZ, Radio::RADIO_POS_SCALE);
     tx_message.telemetry.latitude = 47.119643352372485f;
     tx_message.telemetry.longitude = -88.549229750287f;
+    // Watchdog state is owned by loop() context, not the control tick, so it is
+    // read live here rather than coming from the snapshot - same as RSSI and
+    // battery voltage above.
+    tx_message.telemetry.watchDog =
+        Radio::packWatchdogFlags(Drone::getFlightWatchdogStatus(),
+                                 Drone::getWatchdogTripped());
 
     send(tx_message, MessageTypes::TELEMETRY, sizeof(Telemetry));
 }

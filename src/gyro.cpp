@@ -1,5 +1,6 @@
 #include "gyro.h"
 #include "usb.h"
+#include "configs.h"
 
 namespace Gyro {
 
@@ -14,7 +15,13 @@ struct euler_t {
 enum GyroSetupStates : uint8_t {
     I2C,
     EnableReport,
-    Complete
+    Complete,
+    /**
+     * IMU turned off by config, so bring-up never touched the I2C bus.
+     * Distinct from Complete because update() must not poll a sensor that may
+     * not be fitted, while setupComplete() still has to report success.
+     */
+    Disabled
 };
 
 static Adafruit_BNO08x gyro(GYRO_RESET);
@@ -69,6 +76,17 @@ const DroneState& getDroneState() {return droneState;}
 
 bool setup() {
 
+    // Checked before the switch, because the I2C case below calls begin_I2C()
+    // which fails outright with no BNO08x on the bus, and the caller treats
+    // that as a fatal setup error.
+    if (!Configs::get().gyroEnabled) {
+        if (state != GyroSetupStates::Disabled) {
+            state = GyroSetupStates::Disabled;
+            USB::sendText("Gyro disabled by config");
+        }
+        return true;
+    }
+
     switch (state)
     {
     case GyroSetupStates::I2C :
@@ -112,7 +130,12 @@ bool setup() {
 }
 
 bool setupComplete() {
-    return state == GyroSetupStates::Complete;
+    // Disabled counts as complete for the same reason as Radio: the boot
+    // sequence only needs to know it may move on. Every getter keeps returning
+    // its zero-initialized value, so the control loop sees a level, still
+    // vehicle rather than stale orientation.
+    return state == GyroSetupStates::Complete ||
+           state == GyroSetupStates::Disabled;
 }
 
 void update(){

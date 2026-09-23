@@ -23,7 +23,15 @@ namespace Radio {
             RESET2,
             RADIO_INIT,
             SET_CONFIG,
-            COMPLETE
+            COMPLETE,
+            /**
+             * Radio turned off by config, so bring-up never touched the SPI
+             * bus. Distinct from COMPLETE because update() and sendMessage()
+             * must stay away from hardware that may not be fitted, while
+             * setupComplete() still has to report success or the boot state
+             * machine would fault on a vehicle that is deliberately radioless.
+             */
+            DISABLED
         };
 
         /**
@@ -66,12 +74,38 @@ namespace Radio {
         /**
          * General status messages
          */
+        /**
+         * Bit flags for the `watchDog` byte carried by StatusMsg0_t and by the
+         * USB telemetry record.
+         *
+         * FED is the live state of the comm watchdog and flips back on its own
+         * as soon as heartbeats resume. TRIPPED is latched by the firmware when
+         * the watchdog expires somewhere movement was allowed, and is cleared
+         * only when the dashboard releases its requested state back to SAFE.
+         *
+         * The latch is the field that matters after a radio dropout: nothing
+         * reaches the ground station while the link is down, so by the time
+         * packets flow again the state change and the debug text have already
+         * been and gone. TRIPPED is what is still true.
+         */
+        static constexpr uint8_t WATCHDOG_FED = 1 << 0;
+        static constexpr uint8_t WATCHDOG_TRIPPED = 1 << 1;
+
+        /**
+         * Packs the watchdog flags. Both transports send the same byte, so the
+         * encoding is defined once here rather than per sender.
+         */
+        inline uint8_t packWatchdogFlags(bool fed, bool tripped) {
+            return static_cast<uint8_t>((fed ? WATCHDOG_FED : 0) |
+                                        (tripped ? WATCHDOG_TRIPPED : 0));
+        }
+
         struct __attribute__((packed)) StatusMsg0_t {
             uint16_t loopTimeAvg; // Average loop time in micros
             uint16_t loopTimeMax; // Max loop time in micros
             uint16_t RunTime; // Time that the vehicle has been powered on in seconds
             uint8_t currentMode; // The current mode that the vehicle is in. 
-            uint8_t empty; // Reserved
+            uint8_t watchDog; // Comm watchdog flags, see WATCHDOG_FED/WATCHDOG_TRIPPED
         };
 
         struct __attribute__((packed)) StatusMsg1_t {
@@ -143,6 +177,14 @@ namespace Radio {
             uint32_t value;
         };
 
+        struct __attribute__((packed)) HeartbeatPacket {
+            /**Requested state of the drone */
+            Drone::States state; 
+            bool enableMotors : 1;
+            bool enableGimbal : 1;
+            uint64_t reserved : 54;
+        };
+
         // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything
         // that changes one of these silently breaks every ground-station and
         // dashboard client parsing it. See docs/code-conventions.md section 9.
@@ -156,6 +198,7 @@ namespace Radio {
         static_assert(sizeof(StatusMsg7_t) == 8, "StatusMsg7_t wire size changed");
         static_assert(sizeof(Command_t) == 8, "Command_t wire size changed");
         static_assert(sizeof(ConfigPacket) == 8, "ConfigPacket wire size changed");
+        static_assert(sizeof(HeartbeatPacket) == 8, "HeartbeatPacket wire size changed");
 
         // union all of the radio messages for type safety
         union Message {
@@ -169,9 +212,9 @@ namespace Radio {
             StatusMsg6_t status6;
             Command_t command;
             ConfigPacket config;
+            HeartbeatPacket heartbeat;
 
-            char textArray[8];
-            
+            char textArray[8];            
         };
     
         // Ensure that all messages are 8 bytes
@@ -189,6 +232,7 @@ namespace Radio {
             STATUS6 = 7,
             COMMAND = 8,
             CONFIG = 9,
+            HEARTBEAT = 10,
 
         };
 

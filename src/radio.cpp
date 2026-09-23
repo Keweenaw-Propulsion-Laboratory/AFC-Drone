@@ -81,6 +81,18 @@ bool setup() {
     // A variable to help with timing during the setup process
     static uint32_t setupTimer;
 
+    // Checked here rather than only in update(), because the RESET1 case below
+    // drives the reset line and RADIO_INIT reads the RFM69 version register.
+    // With no module fitted, MISO floats and init() fails, which the caller
+    // treats as a fatal setup error.
+    if (!Configs::get().radioEnabled) {
+        if (setupState != SetupStates::DISABLED) {
+            setupState = SetupStates::DISABLED;
+            USB::sendText("Radio disabled by config");
+        }
+        return true;
+    }
+
     switch (setupState) {
         case SetupStates::RESET1 :
                 pinMode(RFM69_RST, OUTPUT); // Define the reset pin
@@ -150,7 +162,11 @@ bool setup() {
 }
 
 bool setupComplete() {
-    return setupState == SetupStates::COMPLETE;
+    // DISABLED counts as complete: the boot sequence asks this to decide
+    // whether it may move on, and a radioless vehicle has nothing to wait for.
+    // Use linkConnected() to ask whether traffic is actually possible.
+    return setupState == SetupStates::COMPLETE ||
+           setupState == SetupStates::DISABLED;
 }
 
 bool linkConnected() {
@@ -267,6 +283,13 @@ void update() {
                     handleConfig(msg);
                     break;
                 
+                case MessageType::HEARTBEAT :
+                    // Feeds the watchdog and applies the requested state. The
+                    // request is only acted on when it CHANGES - see
+                    // Drone::heartbeat().
+                    Drone::heartbeat(msg.heartbeat.state);
+                    break;
+
                 default:
                     break;
                 }
@@ -313,11 +336,21 @@ void update() {
 
 /** Adds message to radio queue */
 static void sendMessage(Message data, MessageType type) {
+    // Nothing drains the queue while the radio is off, so telemetry pushed
+    // from loop() would otherwise wedge the buffer full and inflate txDropped
+    // on every frame.
+    if (setupState == SetupStates::DISABLED)
+        return;
+
+    // Circular_Buffer::push_back() overwrites its oldest entry once the buffer
+    // is full, and that is the behaviour we want: telemetry is a stream of
+    // snapshots, so the frame being queued now is worth more than the stale one
+    // it displaces. Refusing the new packet instead would leave the dashboard
+    // reading a queue that only gets older. The loss is counted, not silent.
     if (txBuffer.size() >= TX_SIZE)
         txDropped++;
 
     txBuffer.push_back({data, type});
- 
 }
 
 // MARK: Status Senders
@@ -329,6 +362,11 @@ void sendStatus0(const Drone::Telemetry_t& t) {
     msg.status0.loopTimeMax = t.loopTimeMax;
     msg.status0.RunTime = t.runtimeSec;
     msg.status0.currentMode = (uint8_t) t.state;
+    // Watchdog state is owned by loop() context, not the control tick, so it is
+    // read live here rather than coming from the snapshot - same as RSSI and
+    // battery voltage in the other status frames.
+    msg.status0.watchDog = packWatchdogFlags(Drone::getFlightWatchdogStatus(),
+                                             Drone::getWatchdogTripped());
 
     sendMessage( msg, MessageType::STATUS0);
 }

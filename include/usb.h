@@ -22,12 +22,24 @@ enum class MessageTypes : uint8_t {
     TELEMETRY = 3,
     COMMAND = 4,
     CONFIG = 5,
+    HEARTBEAT = 10, // Same as Radio
 };
 
 enum class RadioDirection : uint8_t {
     RECEIVED = 0,
     SENT = 1,
 };
+
+/**
+ * Bring up the serial link.
+ *
+ * Must run before anything calls update() or sendText(). On the Teensy the
+ * native USB CDC is already live and begin() only records a baud rate it then
+ * ignores, which is why this was not needed before. A bench target speaking
+ * over a real UART - the ST-LINK virtual COM port on a Nucleo, say - gets no
+ * bytes at all until the peripheral is configured.
+ */
+void setup();
 
 void update();
 
