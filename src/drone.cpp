@@ -15,6 +15,15 @@ static constexpr uint16_t COMM_WATCHDOG_SAFETY_MS = 100;
 
 // Higher priority (lower number) than the default (128) so the control tick
 // isn't delayed behind lower-priority peripheral interrupts.
+//
+// Do NOT raise this past SysTick's priority. SysTick is what advances millis(),
+// and the tick reads it - recordTelemetry() stamps runtimeSec, and the comm
+// watchdog compares an elapsedMillis. Those reads are only safe because SysTick
+// still preempts this handler: Teensy 4 runs SysTick at 32 (SCB_SHPR3 in the
+// core's startup.c) and STM32L1 at 0 (TICK_INT_PRIORITY), against this value's
+// 64 and 64>>4 = 4 respectively. Lower number wins. A control timer numerically
+// below SysTick's would freeze millis() for the duration of every tick, which
+// stalls the runtime stamp and stops the watchdog ever expiring.
 static constexpr uint8_t CONTROL_TIMER_PRIORITY = 64;
 
 static constexpr int STATUS_LED = 9; // TODO wire LED on flight computer
@@ -47,7 +56,9 @@ static Telemetry_t telemetry{};
 // Hardware timer driving the control loop tick
 static IntervalTimer controlTimer;
 
-static Target_t activeTarget;
+// Holds the current setpoint for the motor and gimbal. Written by loop()
+// context through setTarget(), read by the control ISR in update().
+static volatile Target_t activeTarget;
 
 // MARK: Helpers
 
@@ -68,7 +79,7 @@ States getState() {return currentState;}
  * pushes to the radio/USB tx queues, which loop() drains and which are not
  * interrupt safe.
  */
-void onControlTick() {
+static void onControlTick() {
     const uint32_t startTime = micros();
 
     Drone::update(); // Flight control algorithm + telemetry recording
@@ -98,7 +109,7 @@ void onControlTick() {
  * Starts the hardware timer that drives the flight control loop tick.
  * Called once, after the gimbal/motor outputs it will command are ready.
  */
-void startControlTimer() {
+static void startControlTimer() {
     controlTimer.begin(onControlTick, CONTROL_LOOP_US);
     controlTimer.priority(CONTROL_TIMER_PRIORITY);
 }
@@ -297,10 +308,16 @@ void updateLEDS() {
 }
 
 void setTarget(Target_t target) {
+    // The control tick consumes all four fields as one setpoint. Without this
+    // guard the tick can land mid-update and fly a mix of two commands - the
+    // previous throttle with the new gimbal angle, say. Four stores is well
+    // under a microsecond of the control loop's 1000 us period.
+    noInterrupts();
     activeTarget.gimbalX = target.gimbalX;
     activeTarget.gimbalY = target.gimbalY;
     activeTarget.bottomMotor = target.bottomMotor;
     activeTarget.topMotor = target.topMotor;
+    interrupts();
 }
 
 
@@ -334,6 +351,7 @@ bool startup() {
         if(!Radio::setup()) {
             currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage RADIO_SETUP");
+            break;
         }
 
         if (Radio::setupComplete()) {
@@ -349,6 +367,7 @@ bool startup() {
         if (!Gyro::setup()) {
             currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage SENSOR_SETUP -> GYRO");
+            break;
         }
 
         // if (!GPS::setup()) {
@@ -383,6 +402,15 @@ bool startup() {
             USB::sendText("FAULT");
             lastFaultMs = nowMs;
             faultReported = true;
+        }
+
+        // loop() is unreachable from here - startup() never returns true in
+        // this state - so the radio would otherwise go completely dark on a
+        // boot fault. Serviced every pass, NOT on the 1 Hz message throttle
+        // above: RX_WINDOW_MIN is 10 ms and radio.available() has to be polled
+        // far faster than once a second to catch an incoming packet at all.
+        if (Radio::setupComplete()) {
+            Radio::update();
         }
         break;
     }
@@ -420,6 +448,9 @@ static void recordTelemetry() {
     telemetry.loopTimeMax  = worstTime;
     telemetry.loopTimeMin  = bestTime;
     telemetry.missedTicks  = missedTicks;
+    // Safe in interrupt context: SysTick outranks the control timer, so this
+    // is a plain load of a counter that is still advancing. See
+    // CONTROL_TIMER_PRIORITY.
     telemetry.runtimeSec   = millis() / 1000;
     telemetry.state        = currentState;
 
@@ -460,10 +491,17 @@ static void recordTelemetry() {
  * @warning Called from onControlTick(), i.e. in INTERRUPT CONTEXT.
  */
 void update() {
-    static Target_t activeSlot;
     static constexpr float GIMBAL_INT16_TO_FLOAT = 1638.0f;
 
-    memcpy(&activeSlot, &activeTarget, sizeof(Target_t));
+    // Read field by field through the volatile rather than memcpy'ing over it.
+    // No guard is needed on this side: loop() cannot preempt an ISR, so the
+    // only torn-read window is a write that is already in progress, and
+    // setTarget() closes that one by masking around its own stores.
+    Target_t activeSlot;
+    activeSlot.gimbalX     = activeTarget.gimbalX;
+    activeSlot.gimbalY     = activeTarget.gimbalY;
+    activeSlot.bottomMotor = activeTarget.bottomMotor;
+    activeSlot.topMotor    = activeTarget.topMotor;
 
     // Set gimbal. Scale by 1638. Gives +- 20 degrees of range
     Gimbal::set(activeSlot.gimbalX / GIMBAL_INT16_TO_FLOAT, 
@@ -493,7 +531,7 @@ struct Watchdog {
     bool tripped;
 };
 
-Watchdog mechanismWatchdog;
+static Watchdog mechanismWatchdog;
 
 /**
  * How long the vehicle must sit in SAFE before an escalation out of it is
@@ -579,6 +617,11 @@ void heartbeat(States requested) {
 
 /**
  * Checks if the watchdog timer is still being fed.
+ *
+ * Reached from the control tick through the Motor and Gimbal output guards, so
+ * this runs in interrupt context. elapsedMillis reads millis(), which keeps
+ * advancing there because SysTick outranks the control timer - see
+ * CONTROL_TIMER_PRIORITY.
  */
 bool getFlightWatchdogStatus() {
     return mechanismWatchdog.watchdog < COMM_WATCHDOG_SAFETY_MS;
@@ -619,9 +662,13 @@ bool requestState(States state) {
             return true;
         
         case States::MAN_FLIGHT :
-            // Zero motor output before transition
+            // Zero motor output before transition. Masked for the same
+            // reason as setTarget(): the control tick must not read a
+            // half-zeroed setpoint.
+            noInterrupts();
             activeTarget.bottomMotor = 0;
             activeTarget.topMotor = 0;
+            interrupts();
 
             // Update state
             currentState = state;

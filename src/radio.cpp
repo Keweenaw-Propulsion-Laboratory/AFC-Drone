@@ -342,11 +342,15 @@ static void sendMessage(Message data, MessageType type) {
     if (setupState == SetupStates::DISABLED)
         return;
 
+    // Circular_Buffer::push_back() overwrites its oldest entry once the buffer
+    // is full, and that is the behaviour we want: telemetry is a stream of
+    // snapshots, so the frame being queued now is worth more than the stale one
+    // it displaces. Refusing the new packet instead would leave the dashboard
+    // reading a queue that only gets older. The loss is counted, not silent.
     if (txBuffer.size() >= TX_SIZE)
         txDropped++;
 
     txBuffer.push_back({data, type});
- 
 }
 
 // MARK: Status Senders

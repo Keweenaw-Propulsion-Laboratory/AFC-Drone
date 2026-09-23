@@ -220,10 +220,19 @@ static_assert(sizeof(ConfigReadResponse) == 60,
 
 
 
-static Circular_Buffer<packet_t, 16> txBuffer;
-static Circular_Buffer<packet_t, 16> rxBuffer;
+static constexpr uint8_t TX_DEPTH = 16;
+static constexpr uint8_t RX_DEPTH = 16;
+
+static Circular_Buffer<packet_t, TX_DEPTH> txBuffer;
+static Circular_Buffer<packet_t, RX_DEPTH> rxBuffer;
 
 static uint16_t globalPacketNumber = 0;
+
+/** Frames displaced from a full tx queue. Counted, not silently lost. */
+static uint16_t txDropped = 0;
+
+/** Frames displaced from a full rx queue. Counted, not silently lost. */
+static uint16_t rxDropped = 0;
 
 static void handleConfig(const Message& msg, uint8_t packetLength);
 static void send(Message data, MessageTypes type, int length);
@@ -342,7 +351,17 @@ void update() {
             crc_bytes[1] = newByte;
             const uint16_t received_crc = static_cast<uint16_t>(crc_bytes[0]) |
                                           (static_cast<uint16_t>(crc_bytes[1]) << 8);
-            if (received_crc == packetCrc(temp_rx_pkt) && rxBuffer.size() < 16) {
+            if (received_crc == packetCrc(temp_rx_pkt)) {
+                // Same drop-oldest policy as the tx queue. The rx queue only
+                // backs up when loop() is not draining it, and what is sitting
+                // in it then is a stale setpoint or an already-superseded
+                // heartbeat. Refusing the new frame - which this used to do -
+                // meant the freshest command was the one thrown away, and a
+                // full queue locked the drone onto whatever it held until
+                // loop() caught up. push_back() overwrites the oldest entry.
+                if (rxBuffer.size() >= RX_DEPTH) {
+                    rxDropped++;
+                }
                 rxBuffer.push_back(temp_rx_pkt);
             }
             rx_state = RxState::FIND_SYNC_0;
@@ -422,9 +441,19 @@ void update() {
 }
 
 static void send(Message data, MessageTypes type, int length) {
-    if (length < 0 || length > MAX_DATA_LEN || txBuffer.size() >= 16) {
+    if (length < 0 || length > MAX_DATA_LEN) {
         return;
     }
+
+    // Same policy as Radio::sendMessage(): when the queue is full,
+    // Circular_Buffer::push_back() overwrites the oldest entry and the newest
+    // frame is kept. Refusing the new one instead - which this used to do -
+    // meant a backed-up link served the dashboard progressively staler
+    // telemetry and dropped exactly the frame it most needed.
+    if (txBuffer.size() >= TX_DEPTH) {
+        txDropped++;
+    }
+
     header_t header {globalPacketNumber++, type, (uint8_t) length};
     packet_t packet;
 

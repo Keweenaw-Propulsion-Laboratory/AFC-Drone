@@ -1,0 +1,27 @@
+# Line endings
+#
+# Several files in this repository were committed with CRLF and later converted
+# to LF inside ordinary behaviour commits, which buried a handful of real edits
+# in ~1700 lines of diff noise and made the change effectively unreviewable.
+# Declaring the intent here means the conversion happens once, on checkout and
+# check-in, instead of depending on whichever editor touches a file next.
+#
+# text=auto lets Git decide what is text; eol=lf pins the working-tree ending so
+# it is the same on Linux, macOS, and Windows. Normalize the existing tree with:
+#
+#     git add --renormalize .
+#
+* text=auto eol=lf
+
+# Binary assets: never examined for text, never converted.
+*.png  binary
+*.jpg  binary
+*.pdf  binary
+*.xlsx binary
+*.hex  binary
+*.bin  binary
+*.elf  binary
+
+# Tabular data read by gimbal.cpp's lookup tables. Text, but keep it LF so the
+# transcribed values stay diffable against the source sheet.
+*.csv text eol=lf

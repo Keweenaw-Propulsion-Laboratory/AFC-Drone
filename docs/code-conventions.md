@@ -477,26 +477,60 @@ the control tick.
 ## 8. Interrupt service routines
 
 We currently have one ISR: `Drone::onControlTick()` at
-[drone.cpp:181](../src/drone.cpp#L181). Read it before writing another — it is
-deliberately five lines long.
+[drone.cpp:82](../src/drone.cpp#L82). Read it before writing another.
+
+It is worth knowing why it does not follow the usual advice. The textbook rule
+is that an ISR sets a flag and `loop()` does the work, and this project did that
+originally. It was changed deliberately: polling a flag meant the control
+algorithm did not start until the current pass through radio/USB/gyro servicing
+finished, which put the blocking I2C read of the BNO08x — on the order of
+100 µs — straight into the control loop's jitter budget. `onControlTick()` now
+calls `Drone::update()` directly, so the only variance is the timer's own
+interrupt latency. **That decision is what makes the rest of this section load
+bearing**, because the whole control algorithm now runs in interrupt context.
 
 **Rules:**
 
-- An ISR sets a flag and returns. That is all. The real work happens in
-  `loop()`.
-- **Never** call I2C, SPI, `Serial`, `delay()`, `millis()`-dependent logic, or
-  anything that allocates from an ISR. These are not reentrant and will
-  deadlock or corrupt state.
+- Write an ISR that sets a flag and returns unless you have the same reason
+  `onControlTick()` had. If you do run real work in one, everything it reaches
+  inherits every rule below — audit the whole call tree, not just the handler.
+- **Never** call I2C, SPI, `Serial`, `delay()`, or anything that allocates from
+  an ISR. These are not reentrant and will deadlock or corrupt state.
+- **Never wait on time inside an ISR** — no spinning until `millis()` advances,
+  no busy-wait on `micros()`. Nothing will preempt you to do the work you are
+  waiting for, so the vehicle hangs.
+- **Reading `millis()` or `micros()` is fine**, and the control tick does it:
+  `recordTelemetry()` stamps `runtimeSec` ([drone.cpp:454](../src/drone.cpp#L454))
+  and the comm watchdog compares an `elapsedMillis`
+  ([drone.cpp:626](../src/drone.cpp#L626)). Both are plain loads of a counter
+  that SysTick maintains, and the counters keep advancing during the tick
+  because **SysTick outranks the control timer on both targets**: Teensy 4 sets
+  SysTick to priority 32 (`SCB_SHPR3 = 0x20200000` in the core's `startup.c`)
+  against the control timer's 64, and STM32L1 sets `TICK_INT_PRIORITY = 0`
+  against the timer's 4. Lower number wins, so SysTick preempts the tick.
+  This is a property of the priority numbers, not a guarantee — see the priority
+  rule below.
 - Any variable shared between an ISR and normal code **must** be `volatile`, or
   the compiler will cache it in a register and your flag will never appear to
-  change. See `Drone::controlTick` and `Drone::missedTicks`
-  ([drone.h:55-59](../include/drone.h#L55-L59)).
+  change. See `currentState`, `missedTicks`, and `activeTarget`
+  ([drone.cpp:34](../src/drone.cpp#L34), [49](../src/drone.cpp#L49),
+  [61](../src/drone.cpp#L61)).
 - `volatile` prevents caching. It does **not** make an operation atomic. A
   `volatile uint32_t` counter incremented in an ISR and read in `loop()` is
   fine on a 32-bit core; a 64-bit value or a multi-field struct is not — you
-  would need to disable interrupts around the access.
-- Keep ISR priority deliberate. The control timer runs at priority 64, ahead of
-  the default 128, so peripheral interrupts cannot delay the control tick.
+  would need to disable interrupts around the access. `Drone::setTarget()`
+  ([drone.cpp:310](../src/drone.cpp#L310)) is the worked example: four fields
+  the tick consumes as one setpoint, so the writes are masked.
+- **Mask on the writer, not the reader.** `loop()` cannot preempt an ISR, so
+  guarding the ISR's read of a shared struct accomplishes nothing — by the time
+  the handler is running, a half-finished write has already happened. The
+  loop-context writer is what has to mask.
+- Keep ISR priority deliberate. The control timer runs at priority 64
+  ([drone.cpp:27](../src/drone.cpp#L27)), ahead of the default 128, so
+  peripheral interrupts cannot delay the control tick. **Do not raise it past
+  SysTick's**: a control timer numerically below 32 on the Teensy, or 0 on the
+  STM32, would stop `millis()` advancing for the duration of the tick and
+  quietly freeze both the runtime stamp and the comm watchdog.
 
 Anything touching an ISR, a pin assignment, or a timing interval must be called
 out in the pull request — the [PR template](../.github/pull_request_template.md)
@@ -727,8 +761,7 @@ does not persist, or worse, corrupts an existing one.
    not a global.
 4. Mirror it in the USB telemetry struct in [usb.cpp](../src/usb.cpp) if the
    dashboard needs it.
-5. Update [Radio_API.md](../Radio_API.md) and
-   [dashboard-protocol.md](dashboard-protocol.md) in the same PR.
+5. Update [dashboard-protocol.md](dashboard-protocol.md) in the same PR.
 
 ---
 
