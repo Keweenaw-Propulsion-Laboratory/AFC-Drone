@@ -43,6 +43,12 @@ framework via PlatformIO. Three facts drive nearly every convention below:
   overrun, or a stack overflow does not print a friendly error. The vehicle
   reboots, or worse, keeps flying with corrupt state.
 
+The same sources also build for a **Nucleo-L152RE bench target** (32 MHz
+Cortex-M3, **no FPU**) with nothing attached but the ST-LINK's USB serial port.
+It exists so the protocol, configuration and state-machine code can be tested
+away from the airframe. Your code has to compile and behave on both targets; see
+[Section 13](#13-building-and-warnings).
+
 We are writing C++, but a specific *dialect* of it. We do not use:
 
 | Feature | Why not |
@@ -80,11 +86,12 @@ needs to be.
 - Every header starts with `#pragma once`. We do not use include guards.
 - A header includes only what its own declarations need. If `usb.h` mentions a
   radio type only in a function signature, it *forward-declares* it rather than
-  including `radio.h` — see [usb.h:6-9](../include/usb.h#L6-L9) for an example
-  of this done correctly.
+  including `radio.h` — see [usb.h:11-14](../include/usb.h#L11-L14) for an
+  example of this done correctly.
 - Implementation-only includes (`Arduino.h`, `Servo.h`, driver headers) belong
   in the `.cpp`, not the header. Every include in a header is an include for
-  everyone who uses that header.
+  everyone who uses that header. (`gimbal.h`, `gyro.h` and `radio.h` still break
+  this rule — see [Section 16](#16-migration-status).)
 - Do not create a new module for something that is three functions long. Add it
   to the module it belongs to.
 
@@ -141,81 +148,72 @@ float angle() { return currentAngle; }
 } // namespace Example
 ```
 
-Call sites read `Example::set(12.0f)` — the same as they do today for
-`Gyro::update()`.
+Call sites read `Example::set(12.0f)`, the same as `Gyro::update()` or
+`Radio::setupComplete()` do today. Every module in `src/` now follows this
+pattern.
 
 ### Why not a class of statics
 
-You will see `class Drone`, `class Gyro`, `class Gimbal`, and `class
-ErrorHandler` in the current code with every member marked `static`. That is a
-class being used as a namespace, and it costs us two things:
+Earlier versions of `Drone`, `Gyro` and `Gimbal` were classes with every member
+marked `static`. That is a class being used as a namespace, and it cost us two
+things:
 
 1. **`static` in a `.cpp` hides more than `private:` does.** A `private:` member
    still appears in the header — everyone can *see* it, changing it forces a
    rebuild of every file that includes the header, and it is only one
    `#define private public` away from being reachable. A `static` variable in a
    `.cpp` cannot be named from another file at all, and can be changed freely
-   without touching anyone else's build. This is not theoretical: the
-   `private:` section in `gimbal.h` is precisely what pushed the gimbal's real
-   state out into public globals — see [Section 5](#5-where-state-lives).
+   without touching anyone else's build. This was not theoretical: the
+   `private:` section in the old `gimbal.h` is precisely what pushed the
+   gimbal's real state out into public globals — see
+   [Section 5](#5-where-state-lives).
 
 2. **It is pure ceremony.** Every static class member must be defined a second
-   time, out of line, in the `.cpp` just to satisfy the linker. See
-   [drone.cpp:18-32](../src/drone.cpp#L18-L32) and
-   [gyro.cpp:4-25](../src/gyro.cpp#L4-L25) — roughly thirty lines that exist
-   only to repeat what the header already said, and one more place to forget to
-   update. Namespaces need none of it.
+   time, out of line, in the `.cpp` just to satisfy the linker — dozens of lines
+   that exist only to repeat what the header already said, and one more place
+   to forget to update. Namespaces need none of it.
 
 ### Why not `radio_`-style prefixes
 
-This is the closer call, and worth understanding properly, because most of the
-project is written this way today. `radio.cpp`, `usb.cpp`, `motor.cpp`, and
-`configs.cpp` use module-prefixed free functions with file-scope `static` state
-— and that is a legitimate, well-established C style that already gets the
-**most important** thing right: the state is hidden in the `.cpp`. Prefixes are
-not the problem in this codebase; the writable globals in
-[Section 5](#5-where-state-lives) are.
-
-The gap is genuinely small. Three things decide it:
+`radio.cpp`, `usb.cpp`, `motor.cpp` and `configs.cpp` were originally written
+with module-prefixed free functions (`radio_update()`, `config_save()`) and
+file-scope `static` state. That is a legitimate C style, and it already got the
+**most important** thing right: the state was hidden in the `.cpp`. The gap to a
+namespace is small, but three things decide it:
 
 1. **A namespace is enforced by the compiler; a prefix is only discipline.**
-   This is the deciding argument, and it has already failed here once.
-   [configs.cpp:42](../src/configs.cpp#L42) defines:
+   This is the deciding argument, and it failed here once. `configs.cpp` defined
+   a file-local helper as:
 
    ```cpp
    PersistentConfig defaults()
    ```
 
-   That is a file-local helper — it appears in no header and is used nowhere
-   else. But it is neither `static` nor prefixed, so it exports a global symbol
-   named `defaults` from the object file, free to collide with anything else at
-   link time. Nothing warned, because nothing can: `-Wall -Werror` has no
-   opinion about naming conventions. Wrap the file in `namespace Config { ... }`
-   and the identical slip lands at `Config::defaults()` — still scoped, still
-   safe. **The namespace makes the safe outcome the default when someone
-   forgets.** The prefix has to be remembered on every declaration, forever, by
-   every member.
+   It appeared in no header and was used nowhere else, but it was neither
+   `static` nor prefixed, so it exported a global symbol named `defaults` that
+   was free to collide with anything else at link time. Nothing warned, because
+   nothing can: `-Wall -Werror` has no opinion about naming conventions. Now
+   that the file is wrapped in `namespace Configs { ... }`, the identical slip
+   lands at `Configs::defaults()` ([configs.cpp:84](../src/configs.cpp#L84)) —
+   still scoped, still safe. **The namespace makes the safe outcome the default
+   when someone forgets.**
 
-2. **Types get the scope for free.** [radio.h](../include/radio.h) hand-types
-   the prefix into `radio_SetupStates`, `radio_LinkStates`, `radio_MessageType`,
-   `radio_Header`, and `radio_Packet`, and then again at every use
-   (`radio_MessageType::CONFIG`). Under a namespace these are
-   `Radio::MessageType::CONFIG`, with the scope declared once at the top of the
-   file. Functions, types, enums, and constants all use one mechanism instead of
-   each re-spelling the prefix.
+2. **Types get the scope for free.** The old `radio.h` hand-typed the prefix
+   into `radio_SetupStates`, `radio_MessageType` and so on, and again at every
+   use (`radio_MessageType::CONFIG`). Under a namespace these are
+   `Radio::MessageType::CONFIG`, with the scope declared once.
 
 3. **Module-internal code can drop the qualification.** Inside
    `namespace Radio { }`, the module's own code calls `updateLink()` plainly,
    while every outside caller must write `Radio::updateLink()`. That asymmetry
-   is useful — it makes crossing a module boundary visible at the call site,
-   which is exactly where a reader should be paying attention.
+   makes crossing a module boundary visible at the call site, which is exactly
+   where a reader should be paying attention.
 
-**The honest cost:** `grep -rn "radio_"` finds every declaration, definition,
-and call of a prefixed module in one shot, whereas `Radio::` misses the module's
-own unqualified internal calls. That is a real loss. In practice it is small,
-because a module's internals live in exactly one `.cpp` you can read top to
-bottom — but if you are hunting every use of something, search the header for
-the declaration rather than grepping for call sites.
+**The honest cost:** `grep -rn "Radio::"` misses the module's own unqualified
+internal calls. In practice that is small, because a module's internals live in
+exactly one `.cpp` you can read top to bottom — but if you are hunting every use
+of something, search the header for the declaration rather than grepping for
+call sites.
 
 ### Reopen the namespace in the `.cpp`; never `using namespace`
 
@@ -277,7 +275,7 @@ Reopening the namespace properly buys three things:
 
 3. **The file reads as the module's implementation.** Opening
    `namespace USB {` right after the includes — see
-   [usb.cpp:17](../src/usb.cpp#L17) — says plainly "everything below is USB,"
+   [usb.cpp:18](../src/usb.cpp#L18) — says plainly "everything below is USB,"
    and the module's private helpers are scoped without anyone having to
    remember a prefix.
 
@@ -301,8 +299,9 @@ to misuse. Do not "optimize" by rewriting one as another.
 ### When a `struct` *is* the right answer
 
 Use a plain `struct` for **data that travels** — packets, setpoints, sensor
-readings. `Target_t` in [drone.h:7](../include/drone.h#L7) and the `StatusMsg*_t`
-family in [radio.h](../include/radio.h) are correct as they are. Structs hold
+readings. `Target_t` and `Telemetry_t` in [drone.h:8](../include/drone.h#L8) and
+the `StatusMsg*_t` family in [radio.h](../include/radio.h) are correct as they
+are. Structs hold
 data; namespaces hold behavior.
 
 ---
@@ -316,17 +315,18 @@ data; namespaces hold behavior.
 | Local variable | `camelCase` | `bottomSpeed`, `startTime` |
 | File-scope `static` | `camelCase` | `static float rollingRssi;` |
 | Compile-time constant | `SCREAMING_SNAKE` | `ESC_MIN_US`, `CONTROL_LOOP_HZ` |
-| `enum class` type | `PascalCase` | `DroneStates`, `ConfigKey` |
+| `enum class` type | `PascalCase` | `Drone::States`, `ConfigKey` |
 | `enum class` value | `SCREAMING_SNAKE` | `READY_ARMED`, `FAULT_ERROR` |
-| Wire-format struct | `PascalCase` or `snake_case_t` | `StatusMsg0_t`, `usb_header_t` |
+| Wire-format struct | `PascalCase` or `snake_case_t` | `StatusMsg0_t`, `header_t` |
 
 **Do not prefix functions with the module name once they are namespaced.**
 `Radio::sendMessage()`, not `Radio::radio_sendMessage()`. The namespace already
 says it.
 
-Spelling counts in a public interface. `setupTimmer`, `volitile`, and
-`opperation` appear in the current code; do not add more, and fix them when you
-are already editing the line.
+Spelling counts in a public interface. The misspelled identifiers
+(`setupTimmer`, `opperation`) have been fixed; a few remain in comments
+(`timmer`, `gaurd`, `fllight`). Do not add more, and fix them when you are
+already editing the line.
 
 ---
 
@@ -336,31 +336,30 @@ This is the most important section in this document.
 
 **A module owns its state. Nobody outside the module may write to it.**
 
-Today several modules break this rule by declaring writable globals in their
+Several modules used to break this rule by declaring writable globals in their
 headers:
 
 ```cpp
-// include/gimbal.h — do not copy this pattern
+// old include/gimbal.h — do not copy this pattern
 extern float gimbal_pitch;
 extern float gimbal_yaw;
 ```
 
-Any file that includes `gimbal.h` can write `gimbal_pitch = 5.0f;`. That
+Any file that included `gimbal.h` could write `gimbal_pitch = 5.0f;`. That
 compiles cleanly, produces no warning, and leaves the gimbal's idea of its own
 position disagreeing with the servo's actual position. There is no way to find
 out who did it.
 
 This happened for an understandable reason: `radio.cpp` and `usb.cpp` genuinely
 need to *read* the gimbal setpoint for telemetry, and the class's `private:`
-section was in the way. The fix is a read accessor, not a global.
-
-**Instead:**
+section was in the way. The fix is a read accessor, not a global, and that is
+what the code does now:
 
 ```cpp
 // include/gimbal.h
 namespace Gimbal {
-    float pitch();   // read-only accessor
-    float yaw();
+    float getPitch();   // read-only accessor
+    float getYaw();
 }
 ```
 
@@ -368,7 +367,7 @@ namespace Gimbal {
 // src/gimbal.cpp
 namespace Gimbal {
     static float currentPitch = 0.0f;   // only this file can write it
-    float pitch() { return currentPitch; }
+    float getPitch() { return currentPitch; }
 }
 ```
 
@@ -382,7 +381,7 @@ that is responsible for it.
 - `extern const` and `constexpr` in a header are fine — they cannot be written.
 - If another module needs to read your state, add an accessor function.
 - If another module needs to *change* your state, add a command function that
-  validates the input (`Gimbal::set()`, `Motor::setSpeed()`), so the module can
+  validates the input (`Gimbal::set()`, `Motor::setMotor()`), so the module can
   clamp, apply trim, and keep its invariants.
 - Never duplicate state to work around encapsulation. If you find yourself
   adding a second variable that mirrors a private one, you want an accessor.
@@ -392,15 +391,15 @@ that is responsible for it.
 ## 6. Non-blocking setup
 
 Startup runs as a **state machine**, not as a sequence of blocking calls. Look
-at [Gyro::setup()](../src/gyro.cpp#L27) or
-[radio_setup()](../src/radio.cpp#L65) for the shape of it:
+at [Gyro::setup()](../src/gyro.cpp#L77) or
+[Radio::setup()](../src/radio.cpp#L79) for the shape of it:
 
 ```cpp
 bool setup() {
     switch (state) {
     case SetupStates::FIRST:
         if (!doTheThing()) {
-            ErrorHandler::addError(ErrorHandler::someFailure);
+            USB::sendText("Thing failed");
             return false;           // false means FATAL — go to FAULT_ERROR
         }
         state = SetupStates::SECOND;
@@ -412,8 +411,9 @@ bool setup() {
 bool setupComplete() { return state == SetupStates::COMPLETE; }
 ```
 
-`Drone::startup()` calls these repeatedly from `setup()` in
-[main.cpp:19](../src/main.cpp#L19) until they report complete.
+`setup()` in [main.cpp:15](../src/main.cpp#L15) calls `Drone::startup()`
+repeatedly, and each startup stage calls its modules' `setup()` until they report
+complete. Startup ends in `SAFE`.
 
 **The contract:**
 
@@ -424,53 +424,78 @@ bool setupComplete() { return state == SetupStates::COMPLETE; }
   finished. Finished is `setupComplete()`.
 - **No `delay()` in setup.** To wait, record `millis()` into a `static`
   variable, advance to a waiting state, and compare on the next call. See
-  [radio.cpp:76-89](../src/radio.cpp#L76-L89) for the reset-timing example.
+  [radio.cpp:97-119](../src/radio.cpp#L97-L119) for the reset-timing example.
 - Anything that waits on *another vehicle or operator* must not be part of
   `setupComplete()`. Losing the base station must never prevent the drone from
-  reaching `READY_ARMED` — this is why the radio link handshake is tracked
-  separately in `radio_linkConnected()`.
+  finishing startup — this is why the radio link handshake is tracked
+  separately in `Radio::linkConnected()` and runs in the background from
+  `Radio::update()`.
+- **Optional hardware must be skippable.** If a peripheral can be absent (the
+  bench target has no radio and no IMU), gate its bring-up on a config flag
+  checked *before* touching the bus, and have `setupComplete()` report success
+  when it is disabled. See `RadioEnabled` / `GyroEnabled` and the `DISABLED`
+  setup state in [radio.h](../include/radio.h).
 - No physical actuation during startup. Setup brings up electronics only.
 
 ---
 
 ## 7. The main loop contract
 
-`loop()` in [main.cpp](../src/main.cpp) does two different jobs, and you need to
-know which one your code belongs to.
+The firmware has two execution contexts, and you need to know which one your
+code belongs to.
 
-**Every pass (as fast as possible):** `radio_update()`, `usb_update()`,
-`Gyro::update()`. I/O servicing and sensor polling. These run continuously so
-communications stay responsive.
+**`loop()`, every pass (as fast as possible)** — [main.cpp](../src/main.cpp):
+`Radio::update()`, `USB::update()`, `Gyro::update()`, `Battery::update()`,
+`Drone::serviceWatchdog()`, `Drone::updateLEDS()`. I/O servicing, sensor polling
+and bookkeeping. These run continuously so communications stay responsive.
 
-**Every control tick (exactly 1000 µs):** `Drone::update()`. Flight control —
-reading the active target, running the control algorithm, commanding the gimbal
-and motors.
+**`loop()`, every 100 ms:** telemetry. `loop()` takes **one** snapshot with
+`Drone::getTelemetry()` and hands it to `USB::sendTelemetry()` and every
+`Radio::sendStatusN()`, so all packets in a frame describe the same instant.
 
-The tick is flagged by a hardware timer ISR and consumed by `loop()`, so the
-control algorithm always runs in normal context at a jitter-free cadence.
+**Control tick, every 1000 µs, in interrupt context:** `Drone::update()`. The
+hardware timer ISR calls it directly — see [Section 8](#8-interrupt-service-routines)
+for why. It reads the active target, runs the control algorithm, commands the
+gimbal and motors, and records the telemetry snapshot. It never transmits
+anything itself.
 
 **Rules for anything called from the control tick:**
 
+- Everything in [Section 8](#8-interrupt-service-routines) applies: no I2C,
+  SPI, `Serial`, heap allocation, or pushes to the radio/USB transmit queues.
 - **Never call `delay()`.** Not for a millisecond, not for a microsecond.
 - **No blocking I/O.** No `while (!Serial)`, no spin-waiting on a sensor, no
-  EEPROM writes. `config_save()` blocks for milliseconds — this is why
-  configuration changes are rejected during `FLIGHT`
-  ([configs.cpp:212](../src/configs.cpp#L212)).
+  EEPROM writes. `Configs::save()` blocks for milliseconds — this is why
+  configuration changes are rejected in `MAN_FLIGHT` and `AUTO_FLIGHT`
+  ([configs.cpp:258](../src/configs.cpp#L258)).
 - **Bound your work.** No loop whose iteration count depends on incoming data
   without a hard cap.
-- **Budget:** the whole tick must fit in 1000 µs. `Drone::worstTime` and
-  `Drone::missedTicks` are reported in telemetry — watch them after your change.
-  A rising `missedTicks` means the control algorithm is overrunning.
+- **Budget:** the whole tick must fit in 1000 µs. The worst tick time
+  (`Drone::getWorstTime()`, `loopTimeMax` in telemetry) and the missed-tick
+  count (`Drone::getMissedTicks()`) are reported — watch them after your change.
+  A rising missed-tick count means the control algorithm is overrunning.
 - Prefer `float` over `double`. The Teensy 4.1's Cortex-M7 does have a
-  double-precision FPU, so `double` is not catastrophic here the way it is on
-  an AVR — but single precision is still fewer cycles (markedly so for divide
-  and square root), uses half the memory, and is what the sensor reports and
-  wire formats already use. Write `0.1f`, not `0.1`; an unsuffixed literal
-  promotes the whole expression to `double`.
+  double-precision FPU, but single precision is still fewer cycles (markedly so
+  for divide and square root), uses half the memory, and is what the sensor
+  reports and wire formats already use. On the Nucleo's Cortex-M3 there is no
+  FPU at all, so every floating-point operation is a software call, and
+  `double` is far slower again. Write `0.1f`, not `0.1`; an unsuffixed literal
+  promotes the whole expression to `double`. Prefer integer math or a lookup
+  table where it is easy — see `BREATHE_TABLE` in
+  [drone.cpp](../src/drone.cpp).
+
+**Rules for `loop()` code:**
+
+- It must stay short. `loop()` is not on the control tick, but radio receive
+  windows, the 100 ms watchdog and USB throughput all depend on it coming round
+  quickly. No `delay()` here either.
+- Anything shared with the control tick follows the masking rules in
+  [Section 8](#8-interrupt-service-routines) — `Drone::setTarget()` is the
+  pattern.
 
 If you need to do something slow and periodic (logging, EEPROM, a long
-computation), do it from the every-pass section gated on `millis()`, not from
-the control tick.
+computation), do it from `loop()` gated on `millis()`, the same way telemetry
+is, never from the control tick.
 
 ---
 
@@ -502,7 +527,7 @@ bearing**, because the whole control algorithm now runs in interrupt context.
 - **Reading `millis()` or `micros()` is fine**, and the control tick does it:
   `recordTelemetry()` stamps `runtimeSec` ([drone.cpp:454](../src/drone.cpp#L454))
   and the comm watchdog compares an `elapsedMillis`
-  ([drone.cpp:626](../src/drone.cpp#L626)). Both are plain loads of a counter
+  ([drone.cpp:627](../src/drone.cpp#L627)). Both are plain loads of a counter
   that SysTick maintains, and the counters keep advancing during the tick
   because **SysTick outranks the control timer on both targets**: Teensy 4 sets
   SysTick to priority 32 (`SCB_SHPR3 = 0x20200000` in the core's `startup.c`)
@@ -521,10 +546,13 @@ bearing**, because the whole control algorithm now runs in interrupt context.
   would need to disable interrupts around the access. `Drone::setTarget()`
   ([drone.cpp:310](../src/drone.cpp#L310)) is the worked example: four fields
   the tick consumes as one setpoint, so the writes are masked.
-- **Mask on the writer, not the reader.** `loop()` cannot preempt an ISR, so
-  guarding the ISR's read of a shared struct accomplishes nothing — by the time
-  the handler is running, a half-finished write has already happened. The
-  loop-context writer is what has to mask.
+- **Mask in loop context, never in the ISR.** `loop()` cannot preempt an ISR,
+  so masking inside the handler accomplishes nothing — by the time it is
+  running, any half-finished access from `loop()` has already happened. The
+  `loop()` side is what has to mask, whichever direction the data flows:
+  `Drone::setTarget()` masks a loop-context *write* the ISR reads, and
+  `Drone::getTelemetry()` masks a loop-context *read* of the snapshot the ISR
+  writes.
 - Keep ISR priority deliberate. The control timer runs at priority 64
   ([drone.cpp:27](../src/drone.cpp#L27)), ahead of the default 128, so
   peripheral interrupts cannot delay the control tick. **Do not raise it past
@@ -550,12 +578,13 @@ Getting one wrong produces telemetry that is silently, plausibly wrong.
   inserts padding and the layout no longer matches what the other end expects.
 - Use fixed-width types only: `uint8_t`, `int16_t`, `uint32_t`. Never `int`,
   `long`, or `float` where the size matters across the link.
-- Everything is **little-endian**, matching the Teensy's native order.
+- Everything is **little-endian**, matching the native order of both targets.
 - **Assert the size.** `usb.cpp` does this well
-  ([usb.cpp:162-178](../src/usb.cpp#L162-L178)):
+  ([usb.cpp:198-216](../src/usb.cpp#L198-L216)), as do `radio.h` and
+  `configs.h`:
 
   ```cpp
-  static_assert(sizeof(usb_header_t) == 4, "USB header wire size changed");
+  static_assert(sizeof(header_t) == 4, "USB header wire size changed");
   ```
 
   A `static_assert` turns a silent protocol break into a compile error. Add one
@@ -565,6 +594,10 @@ Getting one wrong produces telemetry that is silently, plausibly wrong.
 - Append new fields to the **end** of an existing wire struct, into its reserved
   tail. Dashboards decode by offset, so inserting a field anywhere else shifts
   every field above it.
+- Enums that go on the wire get **explicit or append-only values**.
+  `Drone::States` spells out every value, and `Configs::ConfigKey` is
+  append-only, so a new entry never renumbers the ones an existing ground
+  station already knows.
 - Changing an existing wire struct is a **breaking change**. Update
   [docs/dashboard-protocol.md](dashboard-protocol.md) in the same pull request,
   and say so in the PR description so the ground-station software is updated in
@@ -585,8 +618,19 @@ A `#define` is a blind text substitution with no type and no respect for scope.
 `constexpr` costs exactly the same at runtime — zero — and the compiler will
 catch you using it wrongly.
 
-Both styles exist in the code today. `motor.cpp` and `usb.cpp` use `constexpr`;
-`gimbal.cpp` and `drone.cpp` still use `#define`. New code uses `constexpr`.
+The source modules now use `constexpr` throughout. The one accepted use of
+`#define` is a **build-time default** that `platformio.ini` can override with a
+`-D` flag, wrapped in `#ifndef`:
+
+```cpp
+#ifndef DEFAULT_RADIO_ENABLED
+#define DEFAULT_RADIO_ENABLED true
+#endif
+```
+
+See `DEFAULT_RADIO_ENABLED` / `DEFAULT_GYRO_ENABLED` in
+[configs.cpp](../src/configs.cpp) and `USB_BAUD` in [usb.cpp](../src/usb.cpp).
+Use this only when a value genuinely differs per build target.
 
 **No bare numbers in logic.** A number that is not obviously self-explaining
 gets a name and a unit:
@@ -603,21 +647,29 @@ is the single most common source of embedded bugs.
 
 ## 11. Errors
 
-Failures that the operator needs to know about go through `ErrorHandler`, not
-only through `usb_send_text()`. Debug text does not reach the ground station and
-is lost on reboot.
+**Today:** report failures with `USB::sendText()`, and return `false` from a
+setup stage when the failure is fatal so the vehicle goes to `FAULT_ERROR`:
 
 ```cpp
 if (!radio.init()) {
-    ErrorHandler::addError(ErrorHandler::radioInitFail);
-    usb_send_text("Radio start failed");   // human-readable, for the bench
+    USB::sendText("Radio start failed");   // human-readable, for the bench
     return false;
 }
 ```
 
-Add new error codes as `static constexpr Error` members of `ErrorHandler`
-([error.h:32-33](../include/error.h#L32-L33)), with a unique code and a
-severity:
+Prefer the NUL-terminated `sendText(const char*)` overload for string literals;
+a hand-counted length is easy to get wrong. Debug text is USB-only — it does
+not reach the ground station and is lost on reboot — so a condition the
+operator must see remotely belongs in telemetry as well (the latched
+`TRIPPED` watchdog flag is the model).
+
+Anything that can print repeatedly must be **throttled**. A message sent from a
+tight loop saturates the USB transmit buffer and starves every other frame; see
+the once-per-second `FAULT` message in `Drone::startup()`.
+
+**Planned:** a structured `ErrorHandler` that buffers errors with a code and a
+severity and reports them over both USB and radio. Its interface is sketched,
+fully commented out, in [error.h](../include/error.h):
 
 | Severity | Meaning | Example |
 | ---: | --- | --- |
@@ -626,9 +678,8 @@ severity:
 | 2 | High | Sensor giving implausible data |
 | 3 | Critical | Loss of control authority |
 
-There are several `// TODO add error` comments in the code
-(e.g. [gyro.cpp:33](../src/gyro.cpp#L33)). Filling these in is a good first
-contribution.
+Until it exists, the `// TODO add error` comments (e.g.
+[gyro.cpp:94](../src/gyro.cpp#L94)) mark the places that will report through it.
 
 ---
 
@@ -641,13 +692,13 @@ The bar is: **comments explain *why*, code explains *what*.**
 i++;  // increment i
 
 // Good — explains a decision the code cannot show
-// begin_I2C() leaves the bus at Teensy's default 100 kHz; the BNO08x is
-// polled every main-loop iteration, so bump to 400 kHz Fast Mode (the
-// documented safe max) to keep that poll cheap.
+// begin_I2C() leaves the bus at Teensy's default 100 kHz; the BNO08x
+// is polled over I2C every main-loop iteration, so bump to 400 kHz
+// Fast Mode (the documented safe max) to keep that poll cheap.
 Wire.setClock(400000);
 ```
 
-The second example is real, from [gyro.cpp:37-40](../src/gyro.cpp#L37-L40). It
+The second example is real, from [gyro.cpp:98-101](../src/gyro.cpp#L98-L101). It
 tells the next person why the line exists and what constraint they would violate
 by removing it. That is the standard.
 
@@ -682,7 +733,30 @@ PlatformIO: Build    (checkmark in the status bar)
 PlatformIO: Upload   (arrow in the status bar)
 ```
 
-The project builds with `-Wall -Werror` on `build_src_flags`
+[platformio.ini](../platformio.ini) defines two environments, and **both must
+build** before a pull request is opened:
+
+```sh
+pio run -e teensy41        # flight computer
+pio run -e nucleo_l152re   # bench target
+```
+
+The Nucleo build exists to run the protocol, configuration and state-machine
+code with no flight hardware attached. Keep it working:
+
+- **Keep target-specific code out of the modules.** Teensy-only APIs
+  (`elapsedMillis`, `IntervalTimer`) are provided for other targets by shims in
+  [platform.h](../include/platform.h) / [platform.cpp](../src/platform.cpp),
+  which is force-included only in the Nucleo build. Add a shim there rather
+  than sprinkling `#ifdef TEENSYDUINO` through `drone.cpp`.
+- **Per-target defaults go in `platformio.ini`** as `-D` flags over an
+  `#ifndef` default ([Section 10](#10-constants-and-magic-numbers)), e.g. the
+  Nucleo build turns the radio and IMU off by default.
+- Library problems that only affect one target are fixed with a build script,
+  not by editing the library — see
+  [scripts/stm32_skip_rh_ask.py](../scripts/stm32_skip_rh_ask.py).
+
+Both environments build with `-Wall -Werror` on `build_src_flags`
 ([platformio.ini](../platformio.ini)), which means **every warning in `src/` is
 a build failure.** This is deliberate. The warnings that `-Wall` catches —
 sign-comparison mistakes, uninitialized reads, unused results — are exactly the
@@ -691,7 +765,7 @@ fails to boot.
 
 Do not silence a warning with a cast until you understand what it is telling
 you. The narrowing-conversion fix in
-[motor.cpp:30-37](../src/motor.cpp#L30-L37) is a good example of taking a
+[motor.cpp:41-48](../src/motor.cpp#L41-L48) is a good example of taking a
 warning seriously: clamping in signed space *before* narrowing, because
 narrowing first would wrap a small negative throttle up to near-maximum.
 
@@ -702,18 +776,21 @@ edit anything under `.pio/` — it is regenerated from `lib_deps`.
 
 ## 14. Git and pull requests
 
-- **Branch from `master`.** Name it `Feature/short-description`,
+- **Branch from `main`.** Name it `Feat/short-description`,
   `Improvement/short-description`, or `fix/short-description`, matching what is
   already in the history.
-- **Never commit directly to `master`.**
+- **Never commit directly to `main`.**
 - Commit messages use a `type: summary` prefix — `feat:`, `fix:`, `docs:`.
   Write what changed and why, not "updates".
 - Fill in the [pull request template](../.github/pull_request_template.md)
   honestly. The Hardware Impact checkboxes exist because pin, PWM, and interrupt
   changes are the ones that damage hardware or drop a vehicle.
-- **"Compiles successfully" is the minimum, not the goal.** If you changed
-  control-loop code, report the observed `worstTime` and `missedTicks` before
-  and after.
+- **"Compiles successfully" — for both environments — is the minimum, not the
+  goal.** If you changed control-loop code, report the observed worst tick
+  time (`loopTimeMax`) and missed-tick count before and after.
+- If you changed a wire format, the state machine, or the heartbeat/watchdog
+  behavior, update [dashboard-protocol.md](dashboard-protocol.md) and the
+  [README](../README.md) in the same pull request.
 - Keep pull requests small. A 200-line PR gets a real review; a 2000-line PR
   gets a rubber stamp.
 
@@ -728,74 +805,86 @@ edit anything under `.pio/` — it is regenerated from `lib_deps`.
 2. Give it `setup()` / `setupComplete()` if it needs hardware bring-up, written
    as a state machine ([Section 6](#6-non-blocking-setup)).
 3. Add the setup call to the right stage of `Drone::startup()` in
-   [drone.cpp](../src/drone.cpp).
-4. Add the periodic call to `loop()` — every pass for I/O, inside the
-   `controlTick` block only if it is genuinely part of flight control.
-5. Add error codes to `ErrorHandler` for anything that can fail.
-6. Add a row to the module table in the [README](../README.md#code-structure).
+   [drone.cpp](../src/drone.cpp). If the hardware can be absent, give it an
+   enable flag in the config ([Section 6](#6-non-blocking-setup)).
+4. Add the periodic call to `loop()` for I/O and polling. Call it from
+   `Drone::update()` only if it is genuinely part of flight control — and then
+   it runs in interrupt context ([Section 8](#8-interrupt-service-routines)).
+5. Anything that moves hardware must check `Drone::getFlightWatchdogStatus()`
+   and the current state before writing an output, the way `Motor::setMotor()`
+   and `Gimbal::set()` do.
+6. Report failures as described in [Section 11](#11-errors).
+7. Make sure both environments build.
+8. Add a row to the module table in the [README](../README.md#code-structure).
 
 ### Adding a configuration setting
 
-A config key touches six places. Missing one produces a setting that silently
-does not persist, or worse, corrupts an existing one.
+A config key touches several places. Missing one produces a setting that
+silently does not persist, or worse, corrupts an existing one.
 
 1. Add the field to `PersistentConfig` in
-   [configs.h](../include/configs.h) — at the **end**, to minimise layout churn.
-2. Add the key to the `ConfigKey` enum. **Appending is much safer than
-   inserting** — inserting shifts every wire ID above it.
-3. **Increment `CONFIG_VERSION`** in [configs.cpp:8](../src/configs.cpp#L8).
-4. Add a case to `config_migrate()` so an existing vehicle's saved trim survives
-   the upgrade instead of resetting to defaults.
-5. Add validation cases to **both** `config_apply()` and `config_read()` — they
-   are separate switches, and a missing case in either returns `INVALID_KEY`.
-6. Add the default to the default-config initializer, and a row to the config
-   table in the [README](../README.md#persistent-configuration).
+   [configs.h](../include/configs.h) — at the **end**, so every existing field
+   keeps its offset — and update the `static_assert` on its size.
+2. **Append** the key to the `ConfigKey` enum. Never insert: the values are wire
+   IDs, and inserting renumbers every key after it.
+3. **Increment `CONFIG_VERSION`** in [configs.cpp:25](../src/configs.cpp#L25).
+4. Freeze the outgoing layout as a `PersistentConfigVN` struct in
+   `configs.cpp` (with a `static_assert` on its size), and add a case to
+   `migrate()` that validates the old image under that struct and carries its
+   fields forward, so an existing vehicle's saved trim survives the upgrade
+   instead of resetting to defaults. The `case (2)` migration is the model.
+5. Add cases to **both** `apply()` and `read()` — they are separate switches,
+   and a missing case in either returns `INVALID_KEY`.
+6. Add the default to `defaults()`. If it should differ on the bench target,
+   use an `#ifndef` default and a `-D` flag
+   ([Section 10](#10-constants-and-magic-numbers)).
+7. Add the key to the config tables in
+   [dashboard-protocol.md](dashboard-protocol.md) and the
+   [README](../README.md#persistent-configuration).
 
 ### Adding a telemetry field
 
-1. Extend or add a `StatusMsg*_t` in [radio.h](../include/radio.h), staying
-   within the 8-byte radio payload.
-2. Add a `static_assert` on its size.
-3. Populate it in the matching `radio_sendStatus*()` in
-   [radio.cpp](../src/radio.cpp). Read the source module through an **accessor**,
-   not a global.
-4. Mirror it in the USB telemetry struct in [usb.cpp](../src/usb.cpp) if the
-   dashboard needs it.
+1. Add the field to `Drone::Telemetry_t` in [drone.h](../include/drone.h) and
+   fill it in `recordTelemetry()` in [drone.cpp](../src/drone.cpp). This runs
+   in the control ISR, so read the source module through an **accessor** and
+   follow the [Section 8](#8-interrupt-service-routines) rules. Values owned by
+   `loop()` context (RSSI, battery voltage, GPS) are read live by the senders
+   instead.
+2. Extend or add a `StatusMsg*_t` in [radio.h](../include/radio.h), staying
+   within the 8-byte radio payload, with a `static_assert` on its size. Pack
+   floats with `floatToFixed()` / `floatToFixedU()` and a named scale factor.
+3. Populate it in the matching `Radio::sendStatusN()` in
+   [radio.cpp](../src/radio.cpp) from the snapshot it is passed. A new status
+   message also needs a `MessageType` value and a call in `loop()`'s telemetry
+   block in [main.cpp](../src/main.cpp).
+4. Mirror it in the USB `Telemetry` struct in [usb.cpp](../src/usb.cpp) if the
+   dashboard needs it. That record is already 64 bytes — the full USB payload —
+   so adding a field there means replacing a field or adding a new message type.
 5. Update [dashboard-protocol.md](dashboard-protocol.md) in the same PR.
 
 ---
 
 ## 16. Migration status
 
-The codebase predates this document and does not fully follow it yet. **Match
-the conventions above in new code**; convert an existing module when you are
-already working in it, as its own commit, separate from behaviour changes.
+The namespace migration is complete: every module in `src/` is a namespace with
+file-`static` state, there are no writable `extern` globals left in any header,
+and the source modules use `constexpr` instead of `#define`. **Match the
+conventions above in new code.** When you fix one of the items below, do it in
+its own commit, separate from behavior changes.
 
-| Module | Current form | Work needed |
+| Module | Current form | Remaining work |
 | --- | --- | --- |
-| `motor` | Free functions + file-`static` | Wrap in `namespace Motor`; replace `extern` speed globals with accessors |
-| `configs` | Free functions + file-`static` | Wrap in `namespace Config`; scope or `static`-qualify the leaked `defaults()` symbol |
-| `radio` | Free functions + file-`static` | Wrap in `namespace Radio`; move stray types out of the odd header indentation |
-| `usb` | Free functions + file-`static` | Wrap in `namespace Usb` |
-| `gimbal` | Class of statics **plus** `extern` globals | Convert; delete the unused private `pitch`/`yaw`; replace globals with accessors |
-| `drone` | Class of statics **plus** `extern` globals | Convert; replace `drone_targ0`/`drone_targ1`/`drone_rollAvg` with accessors |
-| `gyro` | Class with everything `public` | Convert; move sensor handle and raw state private, expose accessors |
-| `error` | Class with nested class | Convert to `namespace ErrorHandler` |
+| `drone`, `motor`, `battery`, `usb` | Namespace + file-`static` | None |
+| `configs` | Namespace + file-`static` | Mark `defaults()` ([configs.cpp:84](../src/configs.cpp#L84)) `static`; it is scoped now but still has external linkage |
+| `radio` | Namespace + file-`static` | Move the `RH_RF69.h` include out of the header; re-indent the header; wire up or remove the unused `handleSetup()` |
+| `gimbal` | Namespace + file-`static` | Move the `Servo.h` include out of the header |
+| `gyro` | Namespace + file-`static` | Move the `Adafruit_BNO08x.h` include out of the header; publish sensor output through a double buffer so the control ISR cannot read a torn update (see the note in `recordTelemetry()`) |
+| `error` | Entirely commented out | Implement as `namespace ErrorHandler` ([Section 11](#11-errors)) |
 
-**Known cleanup, highest value first:**
+**Other known cleanup, highest value first:**
 
-1. Remove the writable `extern` globals ([Section 5](#5-where-state-lives)).
-   `radio.cpp` and `usb.cpp` only ever read them, so this is mechanical and
-   low-risk.
-2. Delete the dead private `Gimbal::pitch` / `Gimbal::yaw` declarations in
-   [gimbal.h:35-36](../include/gimbal.h#L35-L36) — they are declared but never
-   defined or used, and mislead the reader about where the real state is.
-3. Mark `defaults()` in [configs.cpp:42](../src/configs.cpp#L42) `static` (or
-   scope it) so it stops exporting a global symbol. A one-word change, and a
-   good illustration of why [Section 3](#3-the-module-pattern) prefers a
-   namespace over a naming convention.
-4. Replace `#define` constants with `static constexpr`.
-5. Fill in the `// TODO add error` sites.
-
-`motor.cpp` is 63 lines and self-contained — it is the recommended first
-conversion for a new member.
+1. Implement `ErrorHandler` and fill in the `// TODO add error` sites.
+2. Add radio packet-sequence checking (`// TODO` in `Radio::update()`).
+3. Fix the remaining comment typos noted in [Section 4](#4-naming).
+4. Add the Nucleo build to the
+   [PR template](../.github/pull_request_template.md) testing checklist.
