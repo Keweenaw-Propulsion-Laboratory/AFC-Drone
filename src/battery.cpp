@@ -39,7 +39,11 @@ namespace Battery{
     bool setupComplete() {return initialized;}
 
     // Get the current voltage of the battery *Mainly copied from ArduinoDocs for analogRead()*
-    static constexpr float V_REF = 16.5f;     // Analog reference voltage
+    static constexpr float V_REF = 3.3f;     // ADC reference voltage; adjust for the board in use
+    static constexpr float R1 = 10000.0f;    // Ohms: analog input to ground (lower resistor)
+    static constexpr float R2 = 50000.0f;    // Ohms: battery positive to analog input (upper resistor)
+    // Vout = Vin * R1 / (R1 + R2); recover battery voltage with the inverse ratio.
+    static constexpr float DIVIDER_RATIO = (R1 + R2) / R1;
     static constexpr int ADC_STEPS = (1 << ADC_RESOLUTION_BITS) - 1; // Number of steps (2^ADC_RESOLUTION_BITS - 1)
 
     float getVoltage() {
@@ -59,7 +63,7 @@ namespace Battery{
 
         int rawValue = analogRead(BATTERY_PIN); // Read the analog input
         // Have to cast rawValue to a float during the division. As it will truncate to 0 for any ADC reading less than 4095.
-        float voltage = (static_cast<float>(rawValue) / ADC_STEPS) * V_REF; // Convert to voltage
+        float voltage = (static_cast<float>(rawValue) / ADC_STEPS) * V_REF * DIVIDER_RATIO; // Convert to battery voltage
 
         if (!rollingVoltageInitialized) {
             rollingVoltage = voltage;
