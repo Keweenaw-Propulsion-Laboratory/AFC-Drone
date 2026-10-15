@@ -3,6 +3,8 @@
 #include <cstddef>
 #include <cstdint>
 
+class HardwareSerial;
+
 /**
  * LG290P rover positioning for the drone.
  *
@@ -18,6 +20,20 @@
  * https://github.com/sparkfun/SparkFun_LG290P_GNSS_Arduino_Library
  */
 namespace GPS {
+
+    /**
+     * Enable GPS with the final wiring, before the first active setup() call.
+     * GPS defaults to disabled: setup succeeds, update does nothing, position
+     * reads return false and correction writes return zero.
+     *
+     * @param serial Dedicated MCU UART; must remain alive for the program lifetime.
+     * @param uart GNSS-side UART number (1..3), independent of the MCU port number.
+     * @param baud Receiver's current baud rate in bits/s (9600..3000000).
+     * @return False for invalid settings or if already configured.
+     * @warning Call only during startup, outside interrupt context. Connect MCU
+     *          RX to GNSS TX, MCU TX to GNSS RX, and share ground.
+     */
+    bool configure(HardwareSerial& serial, uint8_t uart, uint32_t baud = 460800);
 
     /** GGA fix quality. Only RTK_FIXED indicates resolved RTK ambiguities. */
     enum class FixQuality : uint8_t {
@@ -47,24 +63,24 @@ namespace GPS {
      * Bring up the rover and configure its position stream.
      *
      * Call repeatedly during startup until setupComplete() is true. Completion
-     * means the receiver is configured; it does not require a satellite or RTK
-     * fix. Set gpsSerial and LG290P_UART in GPS.cpp to match the final wiring.
+     * means GPS is disabled or the receiver is configured; it does not require
+     * a satellite or RTK fix. Call configure() first to enable the receiver.
      *
-     * @return True while progressing or complete; false on setup failure,
-     *         including an unassigned Teensy UART.
+     * @return True while progressing, complete or disabled; false on setup failure.
      * @warning Library commands can block for seconds during connection or
      *          restart. Call only during startup, outside interrupt context.
      */
     bool setup();
 
-    /** @return True once the rover is configured and ready to receive reports. */
+    /** @return True when GPS is disabled or the rover configuration is complete. */
     bool setupComplete();
 
     /**
      * Process available UART bytes and cache complete position reports.
      *
      * Call every pass through loop(). Processes at most 512 bytes per call and
-     * does nothing before setup completes; it does not wait for a new fix.
+     * does nothing while disabled or before setup completes; it does not wait
+     * for a new fix.
      * @warning Call from loop(), never from an interrupt handler.
      */
     void update();
@@ -101,7 +117,8 @@ namespace GPS {
      * @param data Correction bytes in their original order, including framing.
      * @param length Number of bytes available.
      * @return Bytes queued, possibly fewer than length; retry the remaining bytes
-     *         on later loop passes. Returns zero before setup or for null data.
+     *         on later loop passes. Returns zero while disabled, before setup
+     *         completes, or for null data.
      * @warning Call from loop(), never an ISR. This does not wait for TX space.
      */
     size_t sendCorrections(const uint8_t* data, size_t length);

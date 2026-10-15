@@ -8,6 +8,7 @@
 #pragma GCC diagnostic ignored "-Wsign-compare"
 #include <SparkFun_LG290P_GNSS.h>
 #pragma GCC diagnostic pop
+#include <cerrno>
 #include <cmath>
 #include <cstdlib>
 
@@ -17,18 +18,17 @@
 
 namespace GPS {
 
-    // TODO: Teensy UART/pins are not finalized. Set to &Serial1, &Serial2, etc.
-    // Reserve that UART for GPS; connect Teensy RX to GNSS TX and TX to RX.
+    // Disabled until configure() supplies the final wiring during startup.
     static HardwareSerial* gpsSerial = nullptr;
-    // GNSS-side UART number (1, 2 or 3), independent of the Teensy Serial number.
-    static constexpr int LG290P_UART = 1; // TODO: Confirm the breakout connector.
-    static constexpr uint32_t GPS_BAUD = 460800; // LG290P default baud rate.
+    static uint8_t receiverUart = 0;
+    static uint32_t gpsBaud = 0;
     static constexpr uint16_t FIX_INTERVAL_MS = 50; // 20 Hz rover measurements.
     static constexpr uint32_t MAX_POSITION_AGE_MS = 500;
     static constexpr int MAX_BYTES_PER_UPDATE = 512;
     static constexpr uint16_t FLIGHT_NAV_MODE = 5; // Quectel dynamic flight mode.
 
     enum class SetupStates : uint8_t {
+        DISABLED,
         CONNECT,
         CONFIGURE,
         STREAM,
@@ -39,7 +39,7 @@ namespace GPS {
     };
 
     static LG290P receiver;
-    static SetupStates state = SetupStates::CONNECT;
+    static SetupStates state = SetupStates::DISABLED;
     static Position latestPosition;
     static uint32_t lastPositionMs = 0;
     static bool reportReceived = false;
@@ -65,10 +65,54 @@ namespace GPS {
         }
     }
 
-    static double nmeaDegrees(const char* field) {
-        const double value = std::strtod(field, nullptr);
+    static bool parseDecimal(const char* field, double& out) {
+        // NMEA decimal fields have no whitespace, exponent or hex notation.
+        const char* cursor = field;
+        if (*cursor == '-' || *cursor == '+') ++cursor;
+        const char* digits = cursor;
+        while (*cursor >= '0' && *cursor <= '9') ++cursor;
+        if (cursor == digits) return false;
+        if (*cursor == '.') {
+            digits = ++cursor;
+            while (*cursor >= '0' && *cursor <= '9') ++cursor;
+            if (cursor == digits) return false;
+        }
+        if (*cursor != '\0') return false;
+
+        errno = 0;
+        char* end = nullptr;
+        const double value = std::strtod(field, &end);
+        if (*end != '\0' || errno == ERANGE || !std::isfinite(value)) return false;
+        out = value;
+        return true;
+    }
+
+    static bool parseByte(const char* field, uint8_t& out) {
+        if (*field == '\0') return false;
+        unsigned value = 0;
+        for (; *field != '\0'; ++field) {
+            if (*field < '0' || *field > '9') return false;
+            value = value * 10 + static_cast<unsigned>(*field - '0');
+            if (value > UINT8_MAX) return false;
+        }
+        out = static_cast<uint8_t>(value);
+        return true;
+    }
+
+    static bool nmeaDegrees(const char* field, unsigned degreeDigits, double limit, double& out) {
+        unsigned digitCount = 0;
+        while (field[digitCount] >= '0' && field[digitCount] <= '9') ++digitCount;
+        if (digitCount != degreeDigits + 2) return false;
+
+        double value;
+        if (!parseDecimal(field, value)) return false;
         const double degrees = std::floor(value / 100.0);
-        return degrees + (value - degrees * 100.0) / 60.0;
+        const double minutes = value - degrees * 100.0;
+        if (minutes >= 60.0 || degrees > limit || (degrees == limit && minutes != 0.0)) {
+            return false;
+        }
+        out = degrees + minutes / 60.0;
+        return true;
     }
 
     static void onPosition(NmeaPacket& packet) {
@@ -77,29 +121,25 @@ namespace GPS {
         }
 
         Position next;
-        const int quality = std::atoi(packet[6].c_str());
-        if (quality >= 1 && quality <= 5) {
+        uint8_t quality;
+        uint8_t satellites;
+        double latitude, longitude, height, geoid;
+        // Read one GGA epoch directly; ellipsoid height includes geoid separation.
+        if (parseByte(packet[6].c_str(), quality) && quality >= 1 && quality <= 5 &&
+            parseByte(packet[7].c_str(), satellites) &&
+            nmeaDegrees(packet[2].c_str(), 2, 90.0, latitude) &&
+            nmeaDegrees(packet[4].c_str(), 3, 180.0, longitude) &&
+            (packet[3] == "N" || packet[3] == "S") &&
+            (packet[5] == "E" || packet[5] == "W") &&
+            parseDecimal(packet[9].c_str(), height) &&
+            parseDecimal(packet[11].c_str(), geoid) &&
+            packet[10] == "M" && packet[12] == "M" &&
+            std::isfinite(height + geoid)) {
             next.fix = static_cast<FixQuality>(quality);
-            next.satellites = static_cast<uint8_t>(std::atoi(packet[7].c_str()));
-
-            // Read one GGA epoch directly. Library getters can enable additional
-            // reports, and GGA sea-level height needs its geoid separation added.
-            next.latitude = nmeaDegrees(packet[2].c_str());
-            next.longitude = nmeaDegrees(packet[4].c_str());
-            if (packet[3] == "S") next.latitude = -next.latitude;
-            if (packet[5] == "W") next.longitude = -next.longitude;
-            next.altitudeMeters = std::strtod(packet[9].c_str(), nullptr) +
-                                  std::strtod(packet[11].c_str(), nullptr);
-
-            if (packet[2].empty() || packet[4].empty() ||
-                packet[9].empty() || packet[11].empty() ||
-                (packet[3] != "N" && packet[3] != "S") ||
-                (packet[5] != "E" && packet[5] != "W") ||
-                !std::isfinite(next.latitude) || !std::isfinite(next.longitude) ||
-                !std::isfinite(next.altitudeMeters) ||
-                std::fabs(next.latitude) > 90.0 || std::fabs(next.longitude) > 180.0) {
-                next.fix = FixQuality::NO_FIX;
-            }
+            next.satellites = satellites;
+            next.latitude = packet[3] == "S" ? -latitude : latitude;
+            next.longitude = packet[5] == "W" ? -longitude : longitude;
+            next.altitudeMeters = height + geoid;
         }
 
         if (next.fix != FixQuality::NO_FIX && baseConfigured) {
@@ -127,19 +167,26 @@ namespace GPS {
         unlockPosition(mask);
     }
 
-    bool setup() {
-        if (state == SetupStates::COMPLETE) return true;
-        if (state == SetupStates::FAILED) return false;
-        if (gpsSerial == nullptr) {
-            USB::sendText("DRONE: GPS UART not configured. Set gpsSerial in GPS.cpp");
-            state = SetupStates::FAILED;
+    bool configure(HardwareSerial& serial, uint8_t uart, uint32_t baud) {
+        if (state != SetupStates::DISABLED || uart < 1 || uart > 3 ||
+            baud < 9600 || baud > 3000000) {
             return false;
         }
+        gpsSerial = &serial;
+        receiverUart = uart;
+        gpsBaud = baud;
+        state = SetupStates::CONNECT;
+        return true;
+    }
+
+    bool setup() {
+        if (setupComplete()) return true;
+        if (state == SetupStates::FAILED) return false;
 
         bool success = false;
         switch (state) {
             case SetupStates::CONNECT:
-                gpsSerial->begin(GPS_BAUD);
+                gpsSerial->begin(gpsBaud);
                 success = receiver.begin(*gpsSerial, "Drone GPS");
                 if (success) state = SetupStates::CONFIGURE;
                 break;
@@ -149,9 +196,9 @@ namespace GPS {
                 success = receiver.ensureModeRover() &&
                           receiver.setFixInterval(FIX_INTERVAL_MS, false) &&
                           receiver.setNavMode(FLIGHT_NAV_MODE, false) &&
-                          receiver.setPortInputProtocols(LG290P_UART,
+                          receiver.setPortInputProtocols(receiverUart,
                               LG290P_COM_TYPE_NMEA | LG290P_COM_TYPE_RTCM3) &&
-                          receiver.setPortOutputProtocols(LG290P_UART, LG290P_COM_TYPE_NMEA) &&
+                          receiver.setPortOutputProtocols(receiverUart, LG290P_COM_TYPE_NMEA) &&
                           receiver.setMessageRate("GGA", 1) &&
                           receiver.setMessageRate("PQTMPVT", 0, 1);
                 if (success) state = SetupStates::STREAM;
@@ -191,10 +238,12 @@ namespace GPS {
         return success;
     }
 
-    bool setupComplete() {return state == SetupStates::COMPLETE;}
+    bool setupComplete() {
+        return state == SetupStates::DISABLED || state == SetupStates::COMPLETE;
+    }
 
     void update() {
-        if (!setupComplete()) return;
+        if (state != SetupStates::COMPLETE || gpsSerial == nullptr) return;
 
         // The byte overload bounds the work; the library's no-argument update()
         // drains the UART without a limit.
@@ -240,7 +289,7 @@ namespace GPS {
     }
 
     size_t sendCorrections(const uint8_t* data, size_t length) {
-        if (!setupComplete() || data == nullptr || length == 0) return 0;
+        if (state != SetupStates::COMPLETE || gpsSerial == nullptr || data == nullptr || length == 0) return 0;
 
         const int available = gpsSerial->availableForWrite();
         if (available <= 0) return 0;
