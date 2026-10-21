@@ -227,22 +227,25 @@ wrap from `LOG999.BIN` back to `LOG000.BIN`. Each deletion blocks the drone's
 main loop briefly - a few milliseconds on exFAT, up to tens of milliseconds on
 FAT32 - and happens at most once a second, in flight too.
 
-If the card is pulled out mid-log, the drone notices within about 0.3 s,
-without blocking, and reports `state` `4` with the `CARD_REMOVED` flag. It
-keeps buffering records in RAM - about 2.5 s at the full telemetry rate, after
-which new records are dropped and counted in `dropped`. Reinserting a card
-while the drone is on the ground mounts it (a little over a second, the first
-time after a removal) and carries on writing at the end of the same
-`LOGnnn.BIN`, buffered records first. Records that reached the card just
-before it was pulled are kept too. A different card, or one whose file is
-gone, gets the next `LOGnnn.BIN` of the same session instead, and
-`decode_log.py` joins the files back up. Either way any dropped stretch shows
-as a sequence gap.
+If the card loses contact mid-log - pulled out, or knocked loose for a moment -
+the drone notices at once, without blocking, and reports `state` `4` with the
+`CARD_REMOVED` flag. It keeps buffering records in RAM - about 2.5 s at the
+full telemetry rate, after which new records are dropped and counted in
+`dropped`.
+
+When the card is back, the drone wakes it in short steps spread over its main
+loop, so this works in flight: no single step holds the loop for more than
+about 11 ms, against the comm watchdog's 100 ms. A card that only lost its
+state takes about 30 ms to come back; one that lost power can take up to about
+a second to finish powering up, all of it without blocking. The same card then
+carries on at the end of the same `LOGnnn.BIN`, buffered records first, with
+no gap if it was back within the buffer's 2.5 s. A different card is taken
+into use once the drone is back in `SAFE` or below, in the next `LOGnnn.BIN`
+of the same session, which `decode_log.py` joins back up. Either way any
+dropped stretch shows as a sequence gap.
 
 Write errors are handled the same way: the drone reopens the file and
-continues at its end, and only moves on to a new file if that keeps failing. A card reinserted while the
-drone is armed or flying is not mounted until it is back in `SAFE` or below,
-because mounting blocks for far longer than the comm watchdog allows.
+continues at its end, and only moves on to a new file if that keeps failing.
 
 Stop discards the buffer while the card is out. Marks still work: they go into
 the buffer like any other record.

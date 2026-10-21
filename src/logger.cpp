@@ -30,8 +30,18 @@ static_assert(offsetof(Drone::Telemetry_t, posZ) == 84, "Telemetry_t layout chan
 #if defined(TEENSYDUINO)
 
 #include <SdFat.h>
+#include "SdCard/SdioTeensy.h" // USDHC1 register names, for driving the card directly
 
 namespace Logger {
+
+// Timing traces for hardware tests, on the debug text channel
+#if defined(LOGGER_TEST_HOOKS)
+#define LOGGER_TRACE(...) do { char traceText[96]; snprintf(traceText, sizeof(traceText), __VA_ARGS__); USB::sendText(traceText); } while (0)
+#else
+// Still type-checks the arguments, so timing variables kept for the trace do
+// not trip -Wunused; the dead branch compiles to nothing.
+#define LOGGER_TRACE(...) do { if (false) { char traceText[1]; snprintf(traceText, 1, __VA_ARGS__); } } while (0)
+#endif
 
 // MARK: Tuning
 
@@ -97,6 +107,17 @@ static constexpr uint32_t CARD_DETECT_INTERVAL_MS = 250;
 // While stopped there is no transfer in progress, so asking is always safe.
 static constexpr uint32_t CARD_PROBE_INTERVAL_MS = 100;
 static constexpr uint32_t STALL_PROBE_US = 250000;
+
+// Bringing a card back after it lost contact. A card that lost power has to
+// run its power-up initialisation again, which the SD spec allows up to 1 s
+// for; SdFat's begin() waits that out in one blocking loop. Instead the card
+// is walked through it here a step per loop pass (see serviceCardWake()), and
+// SdFat's begin() is called only once the card reports ready, when it takes
+// about 10 ms.
+static constexpr uint32_t WAKE_CLOCK_KHZ = 400;       // Identification-mode clock limit
+static constexpr uint32_t WAKE_POLL_INTERVAL_MS = 10;  // Between ACMD41 polls
+static constexpr uint32_t WAKE_TIMEOUT_MS = 1500;      // Spec maximum is 1 s
+static constexpr uint32_t WAKE_COMMAND_TIMEOUT_US = 2000;
 
 // Window for the measured data rate in getStatus().
 static constexpr uint32_t RATE_INTERVAL_MS = 1000;
@@ -226,6 +247,34 @@ static bool cardUnmountable = false; // A card is in the slot but will not mount
 static bool cardRemoved = false; // The mounted card was pulled; cleared by the next mount
 static uint32_t lastProbeMs = 0;
 
+// Set whenever the card's multi-sector write has just ended (a sync, a file
+// opened): the card is then asked whether it is still there before the next
+// write. See drain().
+static bool probeBeforeWrite = false;
+
+// The ID of the mounted card, to tell whether a card coming back is the same
+// one - and so whether the file and space bookkeeping still describe it.
+static cid_t cardCid{};
+static bool haveCardCid = false;
+
+// Waking a card that came back while logging; see serviceCardWake()
+enum class Wake : uint8_t {
+    OFF,     // Not waking a card
+    CMD0,    // Next: reset it to idle
+    CMD8,    // Next: check it is a v2 card and agrees on voltage
+    ACMD41,  // Polling until it finishes power-up
+};
+static Wake wake = Wake::OFF;
+static uint32_t wakeStartMs = 0;
+static uint32_t lastWakeStepMs = 0;
+static uint8_t wakeCmd8Tries = 0;
+// A card still settling after an aborted write can miss the first CMD8, as
+// SdFat's own begin() allows for; it is reset and asked again.
+static constexpr uint8_t WAKE_CMD8_TRIES = 3;
+// A different card came back in flight. It is mounted, but rescanning and
+// re-measuring it would block, so it is taken into use on the ground.
+static bool newCardWaiting = false;
+
 // The open file, or the last one closed while haveFile stays set.
 static bool fileOpen = false;
 static bool haveFile = false;
@@ -335,6 +384,8 @@ static bool mount() {
     }
     clusterBytes = sd.bytesPerCluster();
     cardBytes = static_cast<uint64_t>(sd.clusterCount()) * clusterBytes;
+    haveCardCid = sd.card()->readCID(&cardCid);
+    probeBeforeWrite = false;
     return true;
 }
 
@@ -567,6 +618,7 @@ static bool openSegment() {
     currentSegment = nextSegment;
     nextSegment++;
     lastSyncMs = millis();
+    probeBeforeWrite = true;
     return true;
 }
 
@@ -719,11 +771,24 @@ static void recoverTail(const char* name) {
  * file from another boot that happens to share the name - is never appended
  * to.
  *
- * @param baselineHasIt True when the free-space baseline was measured after
- *        this file was closed (a remount since), so the card count already
- *        includes its space; false when releaseFile() added it instead.
+ * @param credit Where the card-space bookkeeping currently counts this file,
+ *        so it can be moved back to being counted as the open file.
+ * @param rewindRing Instead of recovering the sectors written since the last
+ *        sync from the card - a rewrite of each, and a sync, tens of
+ *        milliseconds - wind the ring's tail back over them, so the normal
+ *        paced writer sends them again. They are still in the ring unless new
+ *        records have since overwritten them; if they have, the stretch is
+ *        lost (the sequence numbers show it) rather than blocking. Only for
+ *        the same card coming back, where fileBytes still describes this file.
  */
-static bool reopenLog(unsigned index, bool baselineHasIt) {
+enum class Credit : uint8_t {
+    NONE,     // Still counted as the open file: closed by onCardRemoved()
+    BASELINE, // A remount since: the free-space baseline includes it
+    RELEASED, // releaseFile() added it to usedSinceMount
+};
+
+static bool reopenLog(unsigned index, Credit credit, bool rewindRing = false) {
+    const uint32_t openStartUs = micros();
     snprintf(fileName, sizeof(fileName), "LOG%03u.BIN", index);
     if (!file.open(fileName, O_RDWR)) return false;
 
@@ -735,18 +800,42 @@ static bool reopenLog(unsigned index, bool baselineHasIt) {
         return false;
     }
 
-    extendTail(file, fh, size);
-    if (!file.sync()) {
-        file.close();
-        return false;
+    if (rewindRing) {
+        // fileBytes is how far into the file the ring had written; the card
+        // has it only up to its recorded size. tail is sector-aligned and
+        // both are whole sectors, so the rewound tail is too.
+        const uint32_t behind = fileBytes > size ? static_cast<uint32_t>(fileBytes - size) : 0;
+        bool rewound = false;
+        __disable_irq(); // Against push() moving head between the check and the move
+        if (behind <= BUFFER_BYTES && head - (tail - behind) <= BUFFER_BYTES) {
+            tail = tail - behind;
+            rewound = true;
+        }
+        __enable_irq();
+        LOGGER_TRACE("Logger trace: reopen: open+header %lu us, ring %s %lu bytes",
+                     static_cast<unsigned long>(micros() - openStartUs),
+                     rewound ? "rewound" : "could not rewind", static_cast<unsigned long>(behind));
+        if (!rewound) note("SD CARD RESUME GAP: records written before the dropout were lost");
+    } else {
+        const uint32_t extendStartUs = micros();
+        const uint32_t recovered = extendTail(file, fh, size);
+        const uint32_t syncStartUs = micros();
+        if (!file.sync()) {
+            file.close();
+            return false;
+        }
+        LOGGER_TRACE("Logger trace: reopen: open+header %lu us, extend %lu sectors %lu us, sync %lu us",
+                     static_cast<unsigned long>(extendStartUs - openStartUs), static_cast<unsigned long>(recovered),
+                     static_cast<unsigned long>(syncStartUs - extendStartUs),
+                     static_cast<unsigned long>(micros() - syncStartUs));
     }
 
     // The open file is counted on its own in getStatus() and filesystemFree(),
     // so take its space back out of whichever total already holds it.
     const uint64_t reserved = static_cast<uint64_t>(fh.preallocSectors) * SECTOR_BYTES;
     const uint64_t space = allocated(max(static_cast<uint64_t>(file.curPosition()), reserved));
-    if (baselineHasIt) freeAtMount += space;
-    else usedSinceMount -= min(usedSinceMount, space);
+    if (credit == Credit::BASELINE) freeAtMount += space;
+    else if (credit == Credit::RELEASED) usedSinceMount -= min(usedSinceMount, space);
 
     fileOpen = true;
     haveFile = true;
@@ -754,6 +843,7 @@ static bool reopenLog(unsigned index, bool baselineHasIt) {
     fileBytes = static_cast<uint32_t>(file.curPosition());
     fileReserved = static_cast<uint32_t>(reserved);
     lastSyncMs = millis();
+    probeBeforeWrite = true;
     return true;
 }
 
@@ -785,7 +875,7 @@ static void onMounted() {
         // Back into the same file when it is this card, otherwise into a new
         // segment of the same session; either way everything buffered while
         // the card was out is still queued ahead of new records.
-        const bool sameFile = haveFile && logExists(fileIndex) && reopenLog(fileIndex, true);
+        const bool sameFile = haveFile && logExists(fileIndex) && reopenLog(fileIndex, Credit::BASELINE);
         if (sameFile || openSegment()) {
             writer = State::LOGGING;
             stalled = false;
@@ -817,6 +907,8 @@ static bool readCardDetect() {
     return digitalReadFast(SD_DAT3_PIN);
 }
 
+static void clearStaleTransfer();
+
 /** Mount a card inserted after boot. Only blocks when one is actually there. */
 static void serviceCardDetect(uint32_t now) {
     if (now - lastDetectMs < CARD_DETECT_INTERVAL_MS) return;
@@ -833,16 +925,17 @@ static void serviceCardDetect(uint32_t now) {
     if (presentReads == 1 && inFlight()) return;
     if (++presentReads < 2) return;
 
-    bool mounted = mount();
-    if (!mounted && cardRemoved) {
-        // A card pulled mid-write leaves SdFat's driver believing a transfer
-        // is still in progress, and sd.begin() does not reset that. The first
-        // mount's first read waits out the driver's 1 s timeout on it, which
-        // clears it, and fails; the second attempt works.
-        mounted = mount();
-    }
+    const uint32_t mountStartUs = micros();
+    if (cardRemoved) clearStaleTransfer();
+    const bool mounted = mount();
+    LOGGER_TRACE("Logger trace: mount %s in %lu us", mounted ? "ok" : "failed",
+                 static_cast<unsigned long>(micros() - mountStartUs));
     if (mounted) {
+        const uint32_t onMountedStartUs = micros();
         onMounted();
+        LOGGER_TRACE("Logger trace: mount to logging %lu us total, onMounted %lu us",
+                     static_cast<unsigned long>(micros() - mountStartUs),
+                     static_cast<unsigned long>(micros() - onMountedStartUs));
     } else {
         char msg[80];
         snprintf(msg, sizeof(msg), "Logger: inserted card would not mount (err 0x%02X); format it",
@@ -854,6 +947,41 @@ static void serviceCardDetect(uint32_t now) {
 }
 
 // MARK: Card removal
+
+/**
+ * Make SdFat's driver forget a transfer that will never finish.
+ *
+ * A card pulled mid-write leaves the driver's "transfer in progress" flag set,
+ * and sd.begin() does not reset it, so the first read after a remount waits
+ * out the driver's 1 s timeout on it. Forcing a data-timeout error through the
+ * controller's FORCE_EVENT register ends that wait at once: syncDevice() sees
+ * the error, drops the flag, and returns. It then tries to stop the write with
+ * CMD12, which a card that is not there simply does not answer.
+ */
+/** Reset the SD controller and re-enable the status flags SdFat relies on. */
+static void resetController() {
+    SDHC_MIX_CTRL |= 0x80000000;
+    SDHC_SYSCTL |= SDHC_SYSCTL_RSTA | SDHC_SYSCTL_SDCLKFS(0x80);
+    const uint32_t startUs = micros();
+    while ((SDHC_SYSCTL & SDHC_SYSCTL_RSTA) && micros() - startUs < 1000) {}
+    SDHC_IRQSTATEN = SDHC_IRQSTATEN_DMAESEN | SDHC_IRQSTATEN_AC12ESEN | SDHC_IRQSTATEN_DEBESEN |
+                     SDHC_IRQSTATEN_DCESEN | SDHC_IRQSTATEN_DTOESEN | SDHC_IRQSTATEN_CIESEN |
+                     SDHC_IRQSTATEN_CEBESEN | SDHC_IRQSTATEN_CCESEN | SDHC_IRQSTATEN_CTOESEN |
+                     SDHC_IRQSTATEN_DINTSEN | SDHC_IRQSTATEN_TCSEN | SDHC_IRQSTATEN_CCSEN;
+}
+
+static void clearStaleTransfer() {
+    // Reset first: a card that vanished mid-command can leave the command line
+    // held busy, and the CMD12 syncDevice() may send would wait out SdFat's
+    // 1 s timeout for it.
+    resetController();
+    USDHC1_FORCE_EVENT = SDHC_IRQSTAT_DTOE;
+    sd.card()->syncDevice();
+    // And after: CMD12 is an abort command, which leaves the controller
+    // holding the command line until its command and data paths are reset.
+    resetController();
+    SDHC_IRQSTAT = SDHC_IRQSTAT; // Nothing is in flight now; start clean
+}
 
 /** True if the mounted card answers a status request. */
 static bool cardResponds() {
@@ -871,13 +999,11 @@ static bool cardMissing(uint32_t now) {
  * The card was pulled out while mounted. Drop the file without touching the
  * card and go back to watching the slot.
  *
- * If it was logging, it carries on buffering in RAM (state CARD_OUT), and the
- * same card inserted on the ground continues the same file - the same
- * handling a write error gets; see reopenLog(). The ring holds about 2.5 s at the
- * full telemetry rate; past that, new records are dropped and counted, and
- * the gap shows in the sequence numbers. Mounting waits until the vehicle is
- * on the ground, because it blocks for far longer than the comm watchdog's
- * 100 ms.
+ * If it was logging, it carries on buffering in RAM (state CARD_OUT) while
+ * serviceCardWake() waits for the card to come back and wakes it without
+ * blocking, in flight too; the same card then continues the same file. The
+ * ring holds about 2.5 s at the full telemetry rate; past that, new records
+ * are dropped and counted, and the gap shows in the sequence numbers.
  *
  * file.close() is deliberately not called: it would try to write the
  * directory entry, and each of its requests waits out SdFat's 1 s timeout
@@ -896,15 +1022,235 @@ static void onCardRemoved() {
 
     writer = accepting ? State::CARD_OUT : State::NO_CARD;
     cardRemoved = true;
+    wake = Wake::OFF;
+    newCardWaiting = false;
+    probeBeforeWrite = false;
     readCardDetect(); // Hand DAT3 back from the SDIO controller for slot polling
     presentReads = 0;
     lastDetectMs = millis();
 
     if (writer == State::CARD_OUT) {
         note("SD CARD REMOVED");
-        USB::sendText("Logger: SD card removed; buffering until it is reinserted on the ground");
+        USB::sendText("Logger: SD card lost; buffering until it is back");
     } else {
         USB::sendText("Logger: SD card removed");
+    }
+}
+
+// MARK: Card wake
+
+/** Clock the controller at no more than kHz, as SdFat's setSdclk() does. */
+static void setWakeClock(uint32_t kHz) {
+    const uint32_t base = (528000000U * 3) / ((CCM_ANALOG_PFD_528 & 0x3F) / 6) /
+                          (((CCM_CSCDR1 >> 11) & 0x7) + 1);
+    uint32_t sdclkfs = 1;
+    uint32_t dvs = 1;
+    while (base / (sdclkfs * 16) > kHz * 1000 && sdclkfs < 0x100) sdclkfs <<= 1;
+    while (base / (sdclkfs * dvs) > kHz * 1000 && dvs < 16) dvs++;
+
+    const uint32_t sysctl = SDHC_SYSCTL & ~(SDHC_SYSCTL_DVS_MASK | SDHC_SYSCTL_SDCLKFS_MASK);
+    SDHC_SYSCTL = sysctl | SDHC_SYSCTL_DVS(dvs - 1) | SDHC_SYSCTL_SDCLKFS(sdclkfs >> 1);
+    const uint32_t startUs = micros();
+    while (!(SDHC_PRSSTAT & SDHC_PRSSTAT_SDSTB) && micros() - startUs < 1000) {}
+}
+
+/**
+ * Send one command and wait for it - well under a millisecond at the 400 kHz
+ * wake clock. No transfer is ever in flight while waking, so clearing the
+ * controller's status flags here cannot lose one SdFat is waiting for.
+ *
+ * @return False if the card did not answer (or for CMD0, never).
+ */
+static uint32_t lastWakeStatus = 0; // INT_STATUS after the last wake command, for traces
+
+static bool wakeCommand(uint8_t index, uint32_t responseFlags, uint32_t arg, uint32_t& response) {
+    constexpr uint32_t COMMAND_ERRORS = SDHC_IRQSTAT_CTOE | SDHC_IRQSTAT_CCE |
+                                        SDHC_IRQSTAT_CEBE | SDHC_IRQSTAT_CIE;
+    const uint32_t startUs = micros();
+    while (SDHC_PRSSTAT & SDHC_PRSSTAT_CIHB) {
+        if (micros() - startUs > WAKE_COMMAND_TIMEOUT_US) return false;
+    }
+    SDHC_IRQSTAT = SDHC_IRQSTAT;
+    SDHC_CMDARG = arg;
+    SDHC_XFERTYP = SDHC_XFERTYP_CMDINX(index) | responseFlags;
+    uint32_t status;
+    while (!((status = SDHC_IRQSTAT) & (SDHC_IRQSTAT_CC | COMMAND_ERRORS))) {
+        if (micros() - startUs > WAKE_COMMAND_TIMEOUT_US) return false;
+    }
+    SDHC_IRQSTAT = status;
+    lastWakeStatus = status;
+    response = SDHC_CMDRSP0;
+    return !(status & COMMAND_ERRORS);
+}
+
+// Response types, as SdFat's CMD_RESP_* for these commands
+static constexpr uint32_t RESP_NONE = SDHC_XFERTYP_RSPTYP(0);
+static constexpr uint32_t RESP_R1_R7 = SDHC_XFERTYP_CICEN | SDHC_XFERTYP_CCCEN | SDHC_XFERTYP_RSPTYP(2);
+static constexpr uint32_t RESP_R3 = SDHC_XFERTYP_RSPTYP(2);
+
+/**
+ * Put the controller in the state SdFat's initSDHC() leaves it in for card
+ * identification: reset, 400 kHz, status flags enabled, DAT3 back on the bus,
+ * and the 74+ clocks a card wants before its first command started. A pulled
+ * card can leave it mid-command with the command line held busy, and only a
+ * reset (in clearStaleTransfer()) clears that. Microseconds, apart from the clocks, which run on their
+ * own while the next pass comes round.
+ */
+static void resetForWake() {
+    clearStaleTransfer(); // Also resets the controller
+    setWakeClock(WAKE_CLOCK_KHZ);
+
+    // DAT3 back to USDHC1, with SdFat's pad setting and its pull-up. Slot
+    // polling left a pull-down on it, and a card that sees DAT3 low when it
+    // receives CMD0 switches to SPI mode - which only a power cycle undoes.
+    IOMUXC_SW_PAD_CTL_PAD_GPIO_SD_B0_05 = IOMUXC_SW_PAD_CTL_PAD_PKE | IOMUXC_SW_PAD_CTL_PAD_DSE(7) |
+                                          IOMUXC_SW_PAD_CTL_PAD_SPEED(2) | IOMUXC_SW_PAD_CTL_PAD_PUE |
+                                          IOMUXC_SW_PAD_CTL_PAD_PUS(1);
+    IOMUXC_SW_MUX_CTL_PAD_GPIO_SD_B0_05 = 0;
+
+    SDHC_SYSCTL |= SDHC_SYSCTL_INITA;
+}
+
+/** Give up on waking this card; watch the slot for it again. */
+static void stopWake(const char* why) {
+    LOGGER_TRACE("Logger trace: wake stopped, status %08lX sysctl %08lX prsstat %08lX proctl %08lX",
+                 static_cast<unsigned long>(lastWakeStatus), static_cast<unsigned long>(SDHC_SYSCTL),
+                 static_cast<unsigned long>(SDHC_PRSSTAT), static_cast<unsigned long>(SDHC_PROCTL));
+    wake = Wake::OFF;
+    readCardDetect(); // Back to GPIO for slot polling
+    presentReads = 0;
+    lastDetectMs = millis();
+    char msg[80];
+    snprintf(msg, sizeof(msg), "Logger: card came back but %s; will retry", why);
+    USB::sendText(msg);
+}
+
+/**
+ * The card has finished powering up. Hand it to SdFat, which now initialises
+ * it in about 10 ms, and if it is the card that left, carry straight on with
+ * the same file without rescanning it.
+ */
+static void finishWake() {
+    wake = Wake::OFF;
+    const cid_t oldCid = cardCid;
+    const bool hadCid = haveCardCid;
+
+    const uint32_t startUs = micros();
+    if (!mount()) {
+        stopWake("would not mount");
+        return;
+    }
+    const uint32_t mountUs = micros() - startUs;
+    const bool sameCard = hadCid && haveCardCid && memcmp(&oldCid, &cardCid, sizeof(cardCid)) == 0;
+
+    if (!sameCard) {
+        if (inFlight()) {
+            // A different card: its logs and free space must be read before
+            // writing to it, which blocks. That waits for the ground.
+            newCardWaiting = true;
+            USB::sendText("Logger: a different card came back; it is used once landed");
+            return;
+        }
+        onMounted();
+        return;
+    }
+
+    // Same card, same filesystem: the list of logs and the space bookkeeping
+    // still hold, so neither has to be read again.
+    if (reopenLog(fileIndex, Credit::NONE, true) || openSegment()) {
+        writer = State::LOGGING;
+        stalled = false;
+        sameFileAttempts = 0;
+        char msg[MAX_TEXT_BYTES];
+        snprintf(msg, sizeof(msg), "Logger: card back, continuing %s", fileName);
+        USB::sendText(msg);
+        note(msg);
+    } else {
+        writer = State::REOPEN_WAIT;
+        retryStartMs = millis();
+        retryDelayMs = RETRY_MIN_MS;
+    }
+    LOGGER_TRACE("Logger trace: wake took %lu ms; mount %lu us, resume %lu us",
+                 static_cast<unsigned long>(millis() - wakeStartMs),
+                 static_cast<unsigned long>(mountUs),
+                 static_cast<unsigned long>(micros() - startUs - mountUs));
+}
+
+/**
+ * Bring back a card that left while logging, without blocking - in flight
+ * included. Runs from update() while the logger is CARD_OUT.
+ *
+ * Watches the slot until a card is seen on two reads in a row, then walks it
+ * through power-up one short step per pass: CMD0 to reset it, CMD8 to agree
+ * the voltage, and ACMD41 every WAKE_POLL_INTERVAL_MS until it reports ready.
+ * Every step is a single command at the 400 kHz identification clock, well
+ * under a millisecond. Only then is it handed to SdFat (finishWake()).
+ */
+static void serviceCardWake(uint32_t now) {
+    if (newCardWaiting) {
+        if (!inFlight()) {
+            newCardWaiting = false;
+            onMounted();
+        }
+        return;
+    }
+
+    uint32_t response = 0;
+    switch (wake) {
+    case Wake::OFF:
+        if (now - lastDetectMs < CARD_DETECT_INTERVAL_MS) return;
+        lastDetectMs = now;
+        if (!digitalReadFast(SD_DAT3_PIN)) {
+            presentReads = 0;
+            return;
+        }
+        if (++presentReads < 2) return; // One interval for the contacts to settle
+
+        // Hand the pins back to the controller and slow it to the clock a card
+        // being identified needs, then send it the 74+ clocks it wants first.
+        resetForWake();
+        wakeStartMs = now;
+        lastWakeStepMs = now;
+        wakeCmd8Tries = 0;
+        wake = Wake::CMD0;
+        return;
+
+    case Wake::CMD0:
+        if (SDHC_SYSCTL & SDHC_SYSCTL_INITA) return; // Still clocking
+        if (now - lastWakeStepMs < (wakeCmd8Tries > 0 ? WAKE_POLL_INTERVAL_MS : 0)) return;
+        lastWakeStepMs = now;
+        wakeCommand(0, RESP_NONE, 0, response);
+        wake = Wake::CMD8;
+        return;
+
+    case Wake::CMD8:
+        if (!wakeCommand(8, RESP_R1_R7, 0x1AA, response) || response != 0x1AA) {
+            if (++wakeCmd8Tries < WAKE_CMD8_TRIES) {
+                wake = Wake::CMD0;
+                return;
+            }
+            // Version 1 cards need SdFat's controller-reset workaround, which
+            // its blocking begin() has; take that path on the ground.
+            stopWake("did not answer CMD8");
+            return;
+        }
+        wake = Wake::ACMD41;
+        return;
+
+    case Wake::ACMD41:
+        if (now - lastWakeStepMs < WAKE_POLL_INTERVAL_MS) return;
+        lastWakeStepMs = now;
+        if (now - wakeStartMs > WAKE_TIMEOUT_MS) {
+            stopWake("never finished powering up");
+            return;
+        }
+        if (!wakeCommand(55, RESP_R1_R7, 0, response) ||
+            !wakeCommand(41, RESP_R3, 0x40300000, response)) {
+            stopWake("stopped answering");
+            return;
+        }
+        if (response & 0x80000000) finishWake(); // Power-up done
+        return;
     }
 }
 
@@ -947,6 +1293,18 @@ static void drain() {
             return;
         }
 
+
+        // First write since the card's multi-sector write ended: nothing is in
+        // flight, so it is safe to ask whether the card is still there - and
+        // necessary, because SdFat starts the new write by polling the card's
+        // status for up to 1 s, which on a card that has gone is all of it.
+        if (probeBeforeWrite) {
+            if (!cardResponds()) {
+                onCardRemoved();
+                return;
+            }
+            probeBeforeWrite = false;
+        }
 
         // The card is still programming the last sector. Writing now would
         // block until it finishes - the stall the ring exists to absorb.
@@ -995,6 +1353,13 @@ static void syncIfDue(uint32_t now) {
     if (now - lastSyncMs < SYNC_INTERVAL_MS || file.isBusy()) return;
 
     const uint32_t startUs = micros();
+    // End the card's multi-sector write first, so asking it a question cannot
+    // clear a transfer-complete flag the driver still wants, then make sure it
+    // is there before the sync's directory write polls a missing card for 1 s.
+    if (!sd.card()->syncDevice() || !cardResponds()) {
+        fail("sync");
+        return;
+    }
     if (!file.sync()) {
         fail("sync");
         return;
@@ -1002,6 +1367,7 @@ static void syncIfDue(uint32_t now) {
     const uint32_t syncUs = micros() - startUs;
     if (syncUs > intervalMaxSyncUs) intervalMaxSyncUs = syncUs;
     lastSyncMs = now;
+    probeBeforeWrite = true;
 }
 
 static void recordStatsIfDue(uint32_t now) {
@@ -1040,13 +1406,13 @@ static void serviceReopen(uint32_t now) {
     bool sameFile = false;
     if (haveFile && logExists(fileIndex) && sameFileAttempts < MAX_SAME_FILE_ATTEMPTS) {
         sameFileAttempts++;
-        sameFile = reopenLog(fileIndex, false);
+        sameFile = reopenLog(fileIndex, Credit::RELEASED);
     }
     bool resumed = sameFile || openSegment();
     if (!resumed && !inFlight()) {
         if (mount()) {
             measureFreeSpace();
-            sameFile = haveFile && logExists(fileIndex) && reopenLog(fileIndex, true);
+            sameFile = haveFile && logExists(fileIndex) && reopenLog(fileIndex, Credit::BASELINE);
             resumed = sameFile || openSegment();
         }
     }
@@ -1110,10 +1476,21 @@ void update() {
         serviceCardDetect(now);
         return;
 
-    case State::CARD_OUT:
+    case State::CARD_OUT: {
         recordStatsIfDue(now); // Into the ring, so the log shows the buffer filling
-        serviceCardDetect(now);
+        const uint32_t passStartUs = micros();
+        serviceCardWake(now);
+        // The figure that matters in flight: the longest the loop was held
+        // up at once, against the comm watchdog's 100 ms.
+        static uint32_t longestPassUs = 0;
+        longestPassUs = max(longestPassUs, micros() - passStartUs);
+        if (writer != State::CARD_OUT) {
+            LOGGER_TRACE("Logger trace: longest single pass while the card was out: %lu us",
+                         static_cast<unsigned long>(longestPassUs));
+            longestPassUs = 0;
+        }
         return;
+    }
 
     case State::IDLE:
         if (cardMissing(now)) onCardRemoved();
@@ -1214,6 +1591,102 @@ uint32_t getDropped() { return dropped; }
 uint32_t getHighWater() { return highWater; }
 uint32_t getWriteErrors() { return writeErrors; }
 
+#if defined(LOGGER_TEST_HOOKS)
+/**
+ * Put the card back in its idle state with CMD0, which is what a brief loss
+ * of contact does to it - minus the loss of power. It stops answering
+ * everything the logger sends, so the removal path runs exactly as for a
+ * real dropout, and the card has to be initialised again to come back.
+ */
+static Result testResetCard(bool midWrite) {
+    if (writer == State::NO_CARD || writer == State::CARD_OUT) return Result::NO_CARD;
+    // Normally the open transfer is finished first. midWrite leaves it open,
+    // as a real pull does: the write never completes, and the driver is left
+    // believing it is still in progress - see clearStaleTransfer().
+    if (!midWrite && fileOpen && !file.sync()) return Result::CARD_ERROR;
+
+    const uint32_t startUs = micros();
+    while ((SDHC_PRSSTAT & SDHC_PRSSTAT_CIHB) && micros() - startUs < 1000) {}
+    SDHC_CMDARG = 0;
+    SDHC_XFERTYP = SDHC_XFERTYP_CMDINX(0); // CMD0, no response
+    while (!(SDHC_IRQSTAT & (SDHC_IRQSTAT_CC | SDHC_IRQSTAT_CTOE | SDHC_IRQSTAT_CCE | SDHC_IRQSTAT_CEBE | SDHC_IRQSTAT_CIE)) && micros() - startUs < 2000) {}
+    // Only the command's own flags: mid-write, the transfer's are not ours
+    SDHC_IRQSTAT = SDHC_IRQSTAT_CC | SDHC_IRQSTAT_CTOE | SDHC_IRQSTAT_CCE | SDHC_IRQSTAT_CEBE | SDHC_IRQSTAT_CIE;
+    if (!midWrite) probeBeforeWrite = true; // As after any sync: the next write starts a new transfer
+    USB::sendText(midWrite ? "Logger test: sent the card CMD0 mid-write" : "Logger test: sent the card CMD0");
+    return Result::OK;
+}
+#endif
+
+#if defined(LOGGER_TEST_HOOKS)
+/**
+ * Read the open log back from the card and check it record by record: every
+ * CRC, and every sequence number following the last. Blocks for as long as
+ * reading the whole file takes, so ground tests only.
+ */
+static Result testVerifyLog() {
+    if (!fileOpen) return Result::WRONG_STATE;
+    if (!sd.card()->syncDevice() || !file.sync()) return Result::CARD_ERROR;
+    probeBeforeWrite = true;
+
+    FsFile check;
+    if (!check.open(fileName, O_RDONLY) || !check.seekSet(HEADER_BYTES)) return Result::CARD_ERROR;
+
+    static uint8_t buf[8192];
+    uint32_t have = 0;
+    uint32_t records = 0, gaps = 0, missing = 0, duplicates = 0, skipped = 0;
+    uint32_t firstSeq = 0, lastSeq = 0;
+    bool haveLast = false;
+    const uint32_t startMs = millis();
+
+    for (;;) {
+        const int got = check.read(buf + have, sizeof(buf) - have);
+        if (got > 0) have += static_cast<uint32_t>(got);
+        uint32_t pos = 0;
+        while (pos + sizeof(RecordHeader) <= have) {
+            RecordHeader rh;
+            if (buf[pos] != RECORD_SYNC) { pos++; skipped++; continue; }
+            memcpy(&rh, buf + pos, sizeof(rh));
+            if (rh.length > MAX_PAYLOAD_BYTES) { pos++; skipped++; continue; }
+            if (pos + sizeof(rh) + rh.length > have) break; // Rest arrives with the next read
+            if (recordCrc(sessionId, &rh, buf + pos + sizeof(rh), rh.length) != rh.crc) {
+                pos++;
+                skipped++;
+                continue;
+            }
+            if (!haveLast) {
+                firstSeq = rh.seq;
+            } else if (rh.seq <= lastSeq) {
+                duplicates++;
+            } else if (rh.seq != lastSeq + 1) {
+                gaps++;
+                missing += rh.seq - lastSeq - 1;
+            }
+            if (!haveLast || rh.seq > lastSeq) lastSeq = rh.seq;
+            haveLast = true;
+            records++;
+            pos += sizeof(rh) + rh.length;
+        }
+        memmove(buf, buf + pos, have - pos);
+        have -= pos;
+        if (got <= 0) break;
+    }
+    check.close();
+
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+             "Logger test: verify %s: %lu records, seq %lu-%lu, %lu gaps (%lu missing), %lu duplicates, "
+             "%lu bytes skipped, %lu trailing, %lu ms",
+             fileName, static_cast<unsigned long>(records), static_cast<unsigned long>(firstSeq),
+             static_cast<unsigned long>(lastSeq), static_cast<unsigned long>(gaps),
+             static_cast<unsigned long>(missing), static_cast<unsigned long>(duplicates),
+             static_cast<unsigned long>(skipped), static_cast<unsigned long>(have),
+             static_cast<unsigned long>(millis() - startMs));
+    USB::sendText(msg);
+    return Result::OK;
+}
+#endif
+
 Result mark(const char* label, size_t length) {
     if (writer == State::NO_CARD) return Result::NO_CARD;
     if (!accepting) return Result::WRONG_STATE;
@@ -1241,6 +1714,17 @@ Result command(Action action, const char* label, size_t labelLength) {
     case Action::MARK:
         result = mark(label, labelLength);
         break;
+#if defined(LOGGER_TEST_HOOKS)
+    case Action::TEST_CARD_RESET:
+        result = testResetCard(false);
+        break;
+    case Action::TEST_CARD_RESET_MID_WRITE:
+        result = testResetCard(true);
+        break;
+    case Action::TEST_VERIFY_LOG:
+        result = testVerifyLog();
+        break;
+#endif
     }
 
     commandCount++;

@@ -27,10 +27,12 @@
  * - The file is synced every 250 ms, and on the next boot setup() scans the
  *   preallocated space past the last sync and recovers any records a power cut
  *   left there. In practice a power cut costs what was still in RAM.
- * - Pulling the card out is noticed within about 0.3 s, without blocking.
- *   Records keep buffering in RAM - about 2.5 s worth before new ones are
- *   dropped - and the same card reinserted on the ground continues the same
- *   file. A different card gets a new segment file of the same session.
+ * - A card that loses contact is noticed at once, without blocking, and
+ *   records keep buffering in RAM - about 2.5 s worth before new ones are
+ *   dropped. When it comes back it is woken up a step per loop pass, in
+ *   flight too (no pass longer than ~11 ms), and the same card carries on in
+ *   the same file. A different card is taken into use on the ground, in a new
+ *   segment file of the same session.
  * - A full card does not end the log. When free space runs low the oldest
  *   LOGnnn.BIN is deleted, and file names wrap from LOG999 back to LOG000.
  *
@@ -116,7 +118,7 @@ enum class State : uint8_t {
     IDLE        = 1, // Mounted, no file open (after stop())
     LOGGING     = 2, // Normal operation
     REOPEN_WAIT = 3, // A write failed; buffering while waiting to retry
-    CARD_OUT    = 4, // The card was pulled mid-log; buffering until it is back
+    CARD_OUT    = 4, // The card lost contact mid-log; buffering until it is back
 };
 
 /** Outcome of start() and stop(). */
@@ -134,6 +136,11 @@ enum class Action : uint8_t {
     START = 1,
     STOP  = 2,
     MARK  = 3, // Write a named marker into the log; works in flight
+#if defined(LOGGER_TEST_HOOKS)
+    TEST_CARD_RESET = 0xF0, // Test builds only: send the card CMD0, as a contact dropout would
+    TEST_CARD_RESET_MID_WRITE = 0xF1, // The same, without first ending the write in progress
+    TEST_VERIFY_LOG = 0xF2, // Read the open log back and report its CRCs and sequence numbers
+#endif
 };
 
 /** Longest label a mark keeps. The radio can carry only 7 characters of one. */
