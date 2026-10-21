@@ -100,8 +100,8 @@ struct __attribute__((packed)) RecordHeader {
 
 /** Logger health, recorded once a second. */
 struct __attribute__((packed)) StatsRecord {
-    uint32_t dropped;        // Records refused because the ring was full, since boot
-    uint32_t highWaterBytes; // Most bytes ever waiting in the ring, since boot
+    uint32_t dropped;        // Records refused because the ring was full, since the last stop()
+    uint32_t highWaterBytes; // Most bytes ever waiting in the ring, since the last stop()
     uint32_t maxStallUs;     // Longest wait on a busy card with data queued, this interval
     uint32_t maxSyncUs;      // Longest file.sync(), this interval
     uint16_t writeErrors;    // Write/sync failures since boot
@@ -256,11 +256,11 @@ void record(const Drone::Telemetry_t& t);
  */
 void note(const char* text);
 
-/** @return Records refused because the ring was full, since boot. */
+/** @return Records refused because the ring was full, since the last stop(). */
 uint32_t getDropped();
 
 /**
- * @return The most bytes that have ever waited in the ring. If this gets
+ * @return The most bytes that have waited in the ring since the last stop(). If this gets
  *         near the ring size (256 KB), the ring needs to be bigger.
  */
 uint32_t getHighWater();

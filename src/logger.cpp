@@ -34,7 +34,10 @@ static_assert(offsetof(Drone::Telemetry_t, posZ) == 84, "Telemetry_t layout chan
 
 namespace Logger {
 
-// Timing traces for hardware tests, on the debug text channel
+// Timing traces for hardware tests, on the debug text channel. LOGGER_TEST_HOOKS
+// has no build environment of its own; for a bench build that has it, run
+//   PLATFORMIO_BUILD_FLAGS=-DLOGGER_TEST_HOOKS pio run -e teensy41 -t upload
+// and never fly that firmware.
 #if defined(LOGGER_TEST_HOOKS)
 #define LOGGER_TRACE(...) do { char traceText[96]; snprintf(traceText, sizeof(traceText), __VA_ARGS__); USB::sendText(traceText); } while (0)
 #else
@@ -1538,6 +1541,16 @@ Result start() {
     return Result::OK;
 }
 
+/**
+ * Zero the ring's loss and peak counters, so the next log starts its own
+ * count. Only once accepting is clear: push() no longer touches dropped, and
+ * drain() has nothing left to raise highWater with.
+ */
+static void resetBufferStats() {
+    dropped = 0;
+    highWater = 0;
+}
+
 Result stop() {
     if (writer == State::NO_CARD) return Result::NO_CARD;
     if (writer == State::IDLE) return Result::WRONG_STATE;
@@ -1550,6 +1563,7 @@ Result stop() {
         snprintf(msg, sizeof(msg), "Logger: stopped while recovering, %lu bytes discarded",
                  static_cast<unsigned long>(head - tail));
         USB::sendText(msg);
+        resetBufferStats();
         writer = writer == State::CARD_OUT ? State::NO_CARD : State::IDLE;
         return Result::OK;
     }
@@ -1572,6 +1586,7 @@ Result stop() {
     file.truncate(); // Release the unused preallocation past the current position
     file.close();
     releaseFile(fileBytes);
+    resetBufferStats();
     writer = State::IDLE;
     return Result::OK;
 }

@@ -145,9 +145,9 @@ struct __attribute__((packed)) LogStatus {
     uint32_t fileBytes;        // Size of the open (or last) log file
     uint32_t bytesPerSec;      // Measured log data rate; 0 when stopped
     uint32_t secondsRemaining; // freeKiB at the logging rate
-    uint32_t dropped;          // Records lost to a full buffer, since boot
+    uint32_t dropped;          // Records lost to a full buffer, since the last stop
     uint16_t writeErrors;      // Card write/sync failures, since boot
-    uint8_t bufferPeakPct;     // Fullest the RAM buffer has been, since boot
+    uint8_t bufferPeakPct;     // Fullest the RAM buffer has been, since the last stop
     uint8_t commandCount;      // +1 per LOG_CONTROL handled; wraps
     uint8_t commandResult;     // Logger::Result of the latest LOG_CONTROL
     uint16_t filesRecycled;    // Old logs deleted to make room, since boot
