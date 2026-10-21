@@ -7,6 +7,7 @@
 #include "usb.h"
 #include "configs.h"
 #include "battery.h"
+#include "logger.h"
 
 void setup() {
     USB::setup();    // Bring up the serial link before anything reports on it
@@ -25,6 +26,7 @@ void loop() {
     Battery::update();
     Drone::serviceWatchdog(); // Runs the failsafe before the LEDs report it
     Drone::updateLEDS();
+    Logger::update();
 
     // Telemetry. The control ISR records a snapshot every tick; sending it is
     // loop()'s job, because pushing to the radio and USB tx queues is not
@@ -46,6 +48,16 @@ void loop() {
         Radio::sendStatus5(snapshot);
         Radio::sendStatus6(snapshot);
         lastTelemetryMs = now;
+    }
+
+    // The logger's card space and file size change slowly, and the dashboard
+    // only needs them for display, so once a second is plenty.
+    static uint32_t lastLogStatusMs = 0;
+    constexpr uint32_t logStatusIntervalMs = 1000;
+    if (now - lastLogStatusMs >= logStatusIntervalMs) {
+        USB::sendLogStatus();
+        Radio::sendLogStatus();
+        lastLogStatusMs = now;
     }
 
     // The flight control algorithm is NOT run from here. Drone::update() is

@@ -22,6 +22,8 @@ enum class MessageTypes : uint8_t {
     TELEMETRY = 3,
     COMMAND = 4,
     CONFIG = 5,
+    LOG_STATUS = 6,  // SD logger status, drone -> dashboard
+    LOG_CONTROL = 7, // Start/stop the SD log, dashboard -> drone
     HEARTBEAT = 10, // Same as Radio
 };
 
@@ -65,6 +67,9 @@ inline void sendText(const char* message) {
  * @param t Snapshot from Drone::getTelemetry().
  */
 void sendTelemetry(const Drone::Telemetry_t& t);
+
+/** Sends the SD logger's status. loop() calls this about once a second. */
+void sendLogStatus();
 void radioRelay(const Radio::Message& message, Radio::MessageType type,
                      uint8_t packetNum, RadioDirection direction);
 }

@@ -14,11 +14,15 @@ optionally, observes or communicates through the RFM69 radio.
 | USB | Dashboard → drone | `HEARTBEAT` | Implemented; feeds the link watchdog and carries the requested state. |
 | USB | Drone → dashboard | `TELEMETRY` | Implemented at approximately 10 Hz; `voltage` now carries a live smoothed pack reading. Record is 64 bytes as of the watchdog field. |
 | USB | Drone → dashboard | `DEBUG_TEXT` | Implemented. |
+| USB | Drone → dashboard | `LOG_STATUS` | Implemented at approximately 1 Hz, plus once after every `LOG_CONTROL`. |
+| USB | Dashboard → drone | `LOG_CONTROL` | Implemented; start, stop, and mark. Answered with a `LOG_STATUS`. |
 | USB | Drone → dashboard | `RADIO_PACKET` relay | Implemented for sent and received RFM69 packets. |
 | RFM69 | Ground station → drone | `COMMAND` | Implemented. |
 | RFM69 | Ground station → drone | `HEARTBEAT` | Implemented; feeds the link watchdog and carries the requested state. |
 | RFM69 | Drone → ground station | `STATUS0`–`STATUS6` | Implemented at approximately 10 Hz; types 3–6 (quaternion, acceleration, velocity, position) now carry live Gyro data. |
 | RFM69 | Ground station → drone | `CONFIG` | Partially implemented; see [Radio configuration limitations](#radio-configuration-limitations). |
+| RFM69 | Drone → ground station | `LOG_STATUS0`–`LOG_STATUS2` | Implemented at approximately 1 Hz, plus once after every radio `LOG_CONTROL`. |
+| RFM69 | Ground station → drone | `LOG_CONTROL` | Implemented; same as USB, with mark labels cut to 7 characters. |
 
 All multi-byte integers and IEEE-754 `float` values are little-endian. All
 structures are packed: do not insert alignment padding in the dashboard
@@ -58,10 +62,12 @@ numbers are validated; the firmware currently does not enforce them.
 | 3 | `TELEMETRY` | Drone → dashboard | 64-byte combined telemetry record. |
 | 4 | `COMMAND` | Dashboard → drone | Exactly 8 payload bytes. |
 | 5 | `CONFIG` | Both | Configuration requests and responses. |
+| 6 | `LOG_STATUS` | Drone → dashboard | 36-byte SD logger status. See [SD logging](#sd-logging). |
+| 7 | `LOG_CONTROL` | Dashboard → drone | 8–49 payload bytes. See [SD logging](#sd-logging). |
 | 10 | `HEARTBEAT` | Dashboard → drone | Exactly 8 payload bytes. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat). |
 
 The USB receive parser only accepts inbound `COMMAND`, `CONFIG`, `HEARTBEAT`,
-and `RAW` frames; other type values are discarded before their payload is read,
+`LOG_CONTROL`, and `RAW` frames; other type values are discarded before their payload is read,
 and an accepted `RAW` frame is then dropped by the dispatcher. A `HEARTBEAT`
 frame whose payload length is not exactly 8 is rejected by the header check and
 never reaches the watchdog, so a malformed heartbeat will let the link time
@@ -209,6 +215,97 @@ default to `1` on the flight build.
 rejected with `UNSAFE_STATE` while the drone is in `MAN_FLIGHT` or
 `AUTO_FLIGHT`.
 
+## SD logging
+
+The drone records binary flight data to its SD card (see `include/logger.h`).
+`LOG_STATUS` and `LOG_CONTROL` let a dashboard watch and control it over USB;
+the radio carries the same information in [RFM69 log messages](#rfm69-log-messages).
+
+The log never stops because the card is full. When free space falls below
+512 MB the drone deletes the oldest `LOGnnn.BIN` to make room, and file names
+wrap from `LOG999.BIN` back to `LOG000.BIN`. Each deletion blocks the drone's
+main loop briefly - a few milliseconds on exFAT, up to tens of milliseconds on
+FAT32 - and happens at most once a second, in flight too.
+
+If the card is pulled out mid-log, the drone notices within about 0.3 s,
+without blocking, and reports `state` `4` with the `CARD_REMOVED` flag. It
+keeps buffering records in RAM - about 2.5 s at the full telemetry rate, after
+which new records are dropped and counted in `dropped`. Reinserting a card
+while the drone is on the ground mounts it (a little over a second, the first
+time after a removal) and carries on writing at the end of the same
+`LOGnnn.BIN`, buffered records first. Records that reached the card just
+before it was pulled are kept too. A different card, or one whose file is
+gone, gets the next `LOGnnn.BIN` of the same session instead, and
+`decode_log.py` joins the files back up. Either way any dropped stretch shows
+as a sequence gap.
+
+Write errors are handled the same way: the drone reopens the file and
+continues at its end, and only moves on to a new file if that keeps failing. A card reinserted while the
+drone is armed or flying is not mounted until it is back in `SAFE` or below,
+because mounting blocks for far longer than the comm watchdog allows.
+
+Stop discards the buffer while the card is out. Marks still work: they go into
+the buffer like any other record.
+
+Besides telemetry, the log holds text records for events: every state change
+(`STATE SAFE -> MAN_FLIGHT`), comm watchdog expiry, operator start/stop, each
+deleted old log, and operator marks (`MARK 3: gust`). `scripts/decode_log.py`
+writes them to the session's `_text.csv`.
+
+### `LOG_STATUS` event (type 6)
+
+Sent about once a second, and immediately after the drone handles a
+`LOG_CONTROL`. Payload is exactly 36 bytes.
+
+| Offset | Type | Field | Meaning |
+| ---: | --- | --- | --- |
+| 0 | `uint8` | `state` | `0` no card, `1` idle (card mounted, not logging), `2` logging, `3` recovering from a card error (data is still being buffered), `4` card removed mid-log (data is still being buffered) |
+| 1 | `uint8` | `flags` | Bit 0 `FILE_OPEN`: a log file is open. Bit 1 `HAVE_FILE`: `fileIndex` and `fileBytes` are valid; they describe the open file, or the last one closed. Bit 2 `CARD_UNMOUNTABLE`: a card is in the slot but would not mount - it needs formatting. Bit 3 `SLOW_FILESYSTEM`: the card is FAT32 rather than exFAT, so expect longer write stalls. Bit 4 `CARD_REMOVED`: the card was pulled out while mounted; set with `state` `4` (or `0` if it was not logging) until a card mounts again. |
+| 2 | `uint16` | `fileIndex` | `n` of the file name `LOGnnn.BIN` |
+| 4 | `uint32` | `cardKiB` | Card capacity, KiB. `0` with no card. |
+| 8 | `uint32` | `freeKiB` | Space a log can still grow into, KiB. Includes the open file's unused preallocation. `0` with no card. |
+| 12 | `uint32` | `fileBytes` | Bytes of the file written to the card so far, including its 512-byte header. Data still buffered in RAM is not counted. |
+| 16 | `uint32` | `bytesPerSec` | Log data accepted over the last second. `0` while not logging. |
+| 20 | `uint32` | `secondsRemaining` | `freeKiB` divided by the most recent non-zero logging rate, or by the nominal 104 000 B/s if none has been measured: how long until the drone starts deleting old logs. An estimate; only meaningful while `state` is not `0`. |
+| 24 | `uint32` | `dropped` | Records lost because the RAM buffer was full, since boot |
+| 28 | `uint16` | `writeErrors` | Card write or sync failures, since boot |
+| 30 | `uint8` | `bufferPeakPct` | The fullest the 256 KB RAM buffer has been since boot, percent. Approaching 100 means the card cannot keep up. |
+| 31 | `uint8` | `commandCount` | Incremented for every `LOG_CONTROL` the drone handles; wraps at 255 |
+| 32 | `uint8` | `commandResult` | Result of the latest `LOG_CONTROL`: `0` OK, `1` refused while armed or flying, `2` no card, `3` already in that state (or, for a mark, not logging), `4` card error, `5` unknown action |
+| 33 | `uint16` | `filesRecycled` | Old logs deleted to make room, since boot |
+| 35 | `uint8` | `marks` | Marks written since boot; wraps at 255 |
+
+Free space is measured once each time a card mounts, then tracked from the
+files the logger itself creates. It does not see anything else written to the
+card while it is mounted.
+
+To confirm a command, remember `commandCount` before sending it and wait for a
+`LOG_STATUS` whose count differs; its `commandResult` is the outcome. The count
+is shared by both links.
+
+### `LOG_CONTROL` request (type 7)
+
+Payload length is 8 to 49 bytes.
+
+| Offset | Type | Field | Meaning |
+| ---: | --- | --- | --- |
+| 0 | `uint8` | `action` | `1` start a new log file, `2` stop and close the current one, `3` mark |
+| 1 | 7–48 bytes | `label` | For a mark: ASCII label, ending at the first NUL or the end of the payload. Otherwise send zero. Pad with zeros to at least 8 bytes in total. |
+
+A mark writes `MARK n: label` into the log at that moment, where `n` counts
+marks since boot. It is accepted in any vehicle state, including flight, and
+refused with result `3` when the log is not running.
+
+Start and stop are refused (result `1`) while the drone is in `READY_ARMED`,
+`MAN_FLIGHT`, or `AUTO_FLIGHT`. Stop flushes the RAM buffer to the card first,
+which blocks the drone's main loop for tens of milliseconds, and start creates
+and preallocates a 256 MB file, which blocks for a similar time.
+
+Stop writes an end marker and closes the file cleanly, so it is the way to end
+a log before power-off. Start always begins a new file, `LOGnnn.BIN` numbered
+after the last. A drone boots logging whenever a card is present, so start is
+only needed after a stop.
+
 ## RFM69 radio protocol
 
 The RFM69 payload is always exactly eight bytes. RadioHead headers are outside
@@ -239,6 +336,10 @@ user-facing setting.
 | 8 | `COMMAND` | Same 8-byte command layout as USB |
 | 9 | `CONFIG` | One configuration request/response |
 | 10 | `HEARTBEAT` | Link keepalive and requested state. See [Link watchdog and heartbeat](#link-watchdog-and-heartbeat). |
+| 11 | `LOG_STATUS0` | SD logger state and current file. See [RFM69 log messages](#rfm69-log-messages). |
+| 12 | `LOG_STATUS1` | SD card space |
+| 13 | `LOG_STATUS2` | SD logger health and command result |
+| 14 | `LOG_CONTROL` | Start, stop, or mark the SD log |
 
 The flight loop queues status types 1–7 every 100 ms. The radio transmitter
 sends no more than one queued packet per 10 ms receive window, so individual
@@ -255,6 +356,20 @@ status packets can arrive later than the 100 ms telemetry tick.
 | `STATUS4` | Three `int16` acceleration fields plus `int16 reserved` | Gyro world-frame acceleration, fixed-point ×1000 (mm/s²). |
 | `STATUS5` | Three `int16` velocity fields plus `int16 reserved` | Gyro dead-reckoned velocity, fixed-point ×1000 (mm/s). |
 | `STATUS6` | Three `int16` position fields plus `int16 reserved` | Gyro dead-reckoned position, fixed-point ×100 (cm). |
+
+### RFM69 log messages
+
+The drone sends `LOG_STATUS0`–`LOG_STATUS2` together once a second, and again
+straight after handling a radio `LOG_CONTROL`. They carry the USB `LOG_STATUS`
+fields in coarser units; `flags`, `state`, and `commandResult` use the same
+values.
+
+| Type | Byte layout |
+| --- | --- |
+| `LOG_STATUS0` (11) | `uint8 state`, `uint8 flags`, `uint16 fileIndex`, `uint32 fileKiB` |
+| `LOG_STATUS1` (12) | `uint32 freeKiB`, `uint16 minutesRemaining` (saturates at 65535), `uint16 cardGiB` |
+| `LOG_STATUS2` (13) | `uint16 dropped` (saturates), `uint8 writeErrors` (saturates), `uint8 bufferPeakPct`, `uint8 commandCount`, `uint8 commandResult`, `uint8 filesRecycled` (saturates), `uint8 marks` |
+| `LOG_CONTROL` (14) | Same as the USB `LOG_CONTROL` at exactly 8 bytes, so a mark label is at most 7 characters |
 
 ### RFM69 command (type 8)
 

@@ -11,6 +11,7 @@ between the Drone and a pysically connected Serial terminal
 #include "configs.h"
 #include "gyro.h"
 #include "battery.h"
+#include "logger.h"
 
 #include "Arduino.h"
 #include "circular_buffer.h"
@@ -115,6 +116,44 @@ struct __attribute__((packed)) Telemetry {
     // 64 / 64 bytes used
 };
 
+/**
+ * LOG_CONTROL request: a Logger::Action, then a mark label for MARK.
+ *
+ * At least 8 bytes, the radio's fixed size, so the same 8 bytes work on both
+ * links. USB may send more to carry a longer label, up to MAX_MARK_LABEL. The
+ * label is ASCII and ends at the first NUL or the end of the payload.
+ */
+struct __attribute__((packed)) LogControl {
+    Logger::Action action;
+    char label[Logger::MAX_MARK_LABEL];
+};
+static constexpr uint8_t LOG_CONTROL_MIN_LENGTH = 8;
+
+// LogStatus.flags
+static constexpr uint8_t LOG_FLAG_FILE_OPEN        = 1 << 0;
+static constexpr uint8_t LOG_FLAG_HAVE_FILE        = 1 << 1;
+static constexpr uint8_t LOG_FLAG_CARD_UNMOUNTABLE = 1 << 2;
+static constexpr uint8_t LOG_FLAG_SLOW_FILESYSTEM  = 1 << 3;
+static constexpr uint8_t LOG_FLAG_CARD_REMOVED     = 1 << 4;
+
+struct __attribute__((packed)) LogStatus {
+    uint8_t state;             // Logger::State
+    uint8_t flags;             // LOG_FLAG_*
+    uint16_t fileIndex;        // n of LOGnnn.BIN, valid with LOG_FLAG_HAVE_FILE
+    uint32_t cardKiB;          // Card capacity
+    uint32_t freeKiB;          // Space a log can still grow into
+    uint32_t fileBytes;        // Size of the open (or last) log file
+    uint32_t bytesPerSec;      // Measured log data rate; 0 when stopped
+    uint32_t secondsRemaining; // freeKiB at the logging rate
+    uint32_t dropped;          // Records lost to a full buffer, since boot
+    uint16_t writeErrors;      // Card write/sync failures, since boot
+    uint8_t bufferPeakPct;     // Fullest the RAM buffer has been, since boot
+    uint8_t commandCount;      // +1 per LOG_CONTROL handled; wraps
+    uint8_t commandResult;     // Logger::Result of the latest LOG_CONTROL
+    uint16_t filesRecycled;    // Old logs deleted to make room, since boot
+    uint8_t marks;             // Marks written since boot; wraps
+};
+
 struct __attribute__((packed)) Config {
     uint8_t version; // 1 byte
     Configs::ConfigState state; // 1 byte
@@ -176,7 +215,8 @@ union __attribute__((packed)) Message {
     ConfigReadResponse configReadResponse;
     Radio::Message radio_message;
     Radio::HeartbeatPacket heartbeat;
-    
+    LogControl logControl;
+    LogStatus logStatus;
 };
 
 // Payload for USB type RADIO_PACKET.  RadioHead carries its headers outside
@@ -208,6 +248,8 @@ static_assert(sizeof(packet_t) <= 4 + MAX_DATA_LEN, "USB packets must fit a head
 static_assert(sizeof(Command) == 8, "USB command wire size changed");
 static_assert(sizeof(Telemetry) == 64, "USB telemetry wire size changed");
 static_assert(sizeof(radio_packet_t) == 11, "USB radio relay wire size changed");
+static_assert(sizeof(LogControl) <= MAX_DATA_LEN, "USB log control must fit a payload");
+static_assert(sizeof(LogStatus) == 36, "USB log status wire size changed");
 // Config and ConfigReadResponse are frozen at the 60 bytes every dashboard
 // already parses. They filled the payload exactly when the ceiling was 60, so
 // they are pinned to a literal rather than tracking MAX_DATA_LEN.
@@ -235,6 +277,7 @@ static uint16_t txDropped = 0;
 static uint16_t rxDropped = 0;
 
 static void handleConfig(const Message& msg, uint8_t packetLength);
+static void handleLogControl(const LogControl& request, uint8_t packetLength);
 static void send(Message data, MessageTypes type, int length);
 
 static uint16_t crc16Update(uint16_t crc, uint8_t value) {
@@ -269,6 +312,11 @@ static bool isValidRxHeader(const header_t& header) {
 
     if (header.type == MessageTypes::HEARTBEAT) {
         return header.packetLength == 8;
+    }
+
+    if (header.type == MessageTypes::LOG_CONTROL) {
+        return header.packetLength >= LOG_CONTROL_MIN_LENGTH &&
+               header.packetLength <= sizeof(LogControl);
     }
 
     return header.type == MessageTypes::CONFIG &&
@@ -434,6 +482,10 @@ void update() {
             Drone::heartbeat(pkt.data.heartbeat.state);
             break;
 
+        case MessageTypes::LOG_CONTROL:
+            handleLogControl(pkt.data.logControl, pkt.header.packetLength);
+            break;
+
         default:
             break;
         }
@@ -540,6 +592,49 @@ void sendTelemetry(const Drone::Telemetry_t& t) {
                                  Drone::getWatchdogTripped());
 
     send(tx_message, MessageTypes::TELEMETRY, sizeof(Telemetry));
+}
+
+void sendLogStatus() {
+    Logger::Status status;
+    Logger::getStatus(status);
+
+    Message tx_message{};
+    LogStatus& out = tx_message.logStatus;
+    out.state = static_cast<uint8_t>(status.state);
+    out.flags = (status.fileOpen ? LOG_FLAG_FILE_OPEN : 0) |
+                (status.haveFile ? LOG_FLAG_HAVE_FILE : 0) |
+                (status.cardUnmountable ? LOG_FLAG_CARD_UNMOUNTABLE : 0) |
+                (status.slowFilesystem ? LOG_FLAG_SLOW_FILESYSTEM : 0) |
+                (status.cardRemoved ? LOG_FLAG_CARD_REMOVED : 0);
+    out.fileIndex = status.fileIndex;
+    out.cardKiB = static_cast<uint32_t>(status.cardBytes / 1024);
+    out.freeKiB = static_cast<uint32_t>(status.freeBytes / 1024);
+    out.fileBytes = status.fileBytes;
+    out.bytesPerSec = status.bytesPerSec;
+    out.secondsRemaining = status.secondsRemaining;
+    out.dropped = status.dropped;
+    out.writeErrors = static_cast<uint16_t>(min(status.writeErrors, static_cast<uint32_t>(UINT16_MAX)));
+    out.bufferPeakPct = status.bufferBytes == 0 ? 0 : static_cast<uint8_t>(
+        static_cast<uint64_t>(status.highWaterBytes) * 100 / status.bufferBytes);
+    out.commandCount = status.commandCount;
+    out.commandResult = static_cast<uint8_t>(status.commandResult);
+    out.filesRecycled = status.filesRecycled;
+    out.marks = static_cast<uint8_t>(status.marks);
+
+    send(tx_message, MessageTypes::LOG_STATUS, sizeof(LogStatus));
+}
+
+/**
+ * Start, stop or mark the SD log on request, then report the result straight
+ * away in a LOG_STATUS rather than waiting for the next periodic one.
+ *
+ * Stop blocks while it flushes the buffer to the card - normally tens of
+ * milliseconds. The logger refuses start and stop while armed or flying.
+ */
+static void handleLogControl(const LogControl& request, uint8_t packetLength) {
+    const size_t labelLength = strnlen(request.label, packetLength - sizeof(request.action));
+    Logger::command(request.action, request.label, labelLength);
+    sendLogStatus();
 }
 
 static void handleConfig(const Message& msg, uint8_t packetLength) {

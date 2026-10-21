@@ -11,6 +11,7 @@
 #include "motor.h"
 #include "configs.h"
 #include "battery.h"
+#include "logger.h"
 
 namespace Radio {
 
@@ -283,6 +284,14 @@ void update() {
                     handleConfig(msg);
                     break;
                 
+                case MessageType::LOG_CONTROL :
+                    // Same 8 bytes as the USB LOG_CONTROL minimum: action,
+                    // then up to 7 characters of mark label.
+                    Logger::command(msg.logControl.action, msg.logControl.label,
+                                    strnlen(msg.logControl.label, sizeof(msg.logControl.label)));
+                    sendLogStatus();
+                    break;
+
                 case MessageType::HEARTBEAT :
                     // Feeds the watchdog and applies the requested state. The
                     // request is only acted on when it CHANGES - see
@@ -440,6 +449,47 @@ void sendStatus6(const Drone::Telemetry_t& t) {
     msg.status6.empty = 0;
 
     sendMessage(msg, MessageType::STATUS6);
+}
+
+// MARK: Log status
+
+void sendLogStatus() {
+    Logger::Status status;
+    Logger::getStatus(status);
+
+    const uint8_t flags =
+        (status.fileOpen ? LOG_FLAG_FILE_OPEN : 0) |
+        (status.haveFile ? LOG_FLAG_HAVE_FILE : 0) |
+        (status.cardUnmountable ? LOG_FLAG_CARD_UNMOUNTABLE : 0) |
+        (status.slowFilesystem ? LOG_FLAG_SLOW_FILESYSTEM : 0) |
+        (status.cardRemoved ? LOG_FLAG_CARD_REMOVED : 0);
+
+    Message msg{};
+    msg.logStatus0.state = static_cast<uint8_t>(status.state);
+    msg.logStatus0.flags = flags;
+    msg.logStatus0.fileIndex = status.fileIndex;
+    msg.logStatus0.fileKiB = status.fileBytes / 1024;
+    sendMessage(msg, MessageType::LOG_STATUS0);
+
+    msg = Message{};
+    msg.logStatus1.freeKiB = static_cast<uint32_t>(min(status.freeBytes / 1024,
+                                                       static_cast<uint64_t>(UINT32_MAX)));
+    msg.logStatus1.minutesRemaining = static_cast<uint16_t>(min(status.secondsRemaining / 60,
+                                                               static_cast<uint32_t>(UINT16_MAX)));
+    msg.logStatus1.cardGiB = static_cast<uint16_t>(min(status.cardBytes >> 30,
+                                                       static_cast<uint64_t>(UINT16_MAX)));
+    sendMessage(msg, MessageType::LOG_STATUS1);
+
+    msg = Message{};
+    msg.logStatus2.dropped = static_cast<uint16_t>(min(status.dropped, static_cast<uint32_t>(UINT16_MAX)));
+    msg.logStatus2.writeErrors = static_cast<uint8_t>(min(status.writeErrors, static_cast<uint32_t>(UINT8_MAX)));
+    msg.logStatus2.bufferPeakPct = status.bufferBytes == 0 ? 0 : static_cast<uint8_t>(
+        static_cast<uint64_t>(status.highWaterBytes) * 100 / status.bufferBytes);
+    msg.logStatus2.commandCount = status.commandCount;
+    msg.logStatus2.commandResult = static_cast<uint8_t>(status.commandResult);
+    msg.logStatus2.filesRecycled = static_cast<uint8_t>(min(status.filesRecycled, static_cast<uint16_t>(UINT8_MAX)));
+    msg.logStatus2.marks = static_cast<uint8_t>(status.marks);
+    sendMessage(msg, MessageType::LOG_STATUS2);
 }
 
 // MARK: Message Handlers
