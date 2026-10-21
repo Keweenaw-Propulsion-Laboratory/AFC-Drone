@@ -18,318 +18,224 @@ The drone allows the team to develop and test:
 * Telemetry and command protocols
 * Hardware-in-the-loop and ground testing procedures
 
-The project is still under active development. The startup architecture and subsystem interfaces are in place, while the full flight-control and periodic telemetry logic are still being integrated.
+The project is still under active development. Startup, the control-loop timing, telemetry, persistent configuration and the link-watchdog safety model are in place. Manual control of the gimbal and motors works, but autonomous flight control has not been written yet.
+
+---
+
+## Getting Started
+
+New contributors should start with these documents:
+
+| Document | Purpose |
+| --- | --- |
+| [Workspace Setup](docs/new_user_setup/Welcome.md) | Installing VS Code, PlatformIO, GitHub Desktop and Teensy Loader |
+| [Code Conventions](docs/code-conventions.md) | Module pattern, state ownership, real-time and ISR rules, wire-format rules, and recipes for common changes |
+| [Dashboard Protocol Reference](docs/dashboard-protocol.md) | Byte-level USB and RFM69 protocol, configuration keys, heartbeat and watchdog rules |
+| [Battery Monitor](docs/battery/batteryinfo.md) | Voltage-divider hardware, thresholds and smoothing |
+| [Battery Charging](docs/battery-charging.md) | Charger settings, charging and storage procedures for the 4S LiPo |
+
+Pull requests follow the template in [.github/pull_request_template.md](.github/pull_request_template.md).
+
+### Build Targets
+
+The project builds with PlatformIO. [platformio.ini](platformio.ini) defines two environments, and both compile with `-Wall -Werror`.
+
+| Environment | Board | Purpose |
+| --- | --- | --- |
+| `teensy41` | Teensy 4.1 | The flight computer. |
+| `nucleo_l152re` | ST Nucleo-L152RE | Bench target that runs the same sources with only the ST-LINK USB virtual COM port connected. Radio and IMU are disabled by default so startup reaches `SAFE` without that hardware attached. This lets you test the protocol, configuration and state-machine code away from the airframe. |
+
+```sh
+pio run -e teensy41            # build the flight firmware
+pio run -e teensy41 -t upload  # build and flash the Teensy
+pio run -e nucleo_l152re       # build the bench target
+```
+
+The Nucleo build depends on two support files:
+
+* [include/platform.h](include/platform.h) is force-included only in that build. It provides `elapsedMillis`, `elapsedMicros` and an STM32-backed `IntervalTimer`, and undefines ST's `USB` macro.
+* [scripts/stm32_skip_rh_ask.py](scripts/stm32_skip_rh_ask.py) removes RadioHead's ASK driver from the build, because the STM32L152 has no TIM1.
 
 ---
 
 ## Code Structure
 
-The flight software is divided into several subsystem-focused modules.
+The flight software is split into modules, one per subsystem. Each module is a namespace of free functions with file-`static` state. See the [Code Conventions](docs/code-conventions.md) for the pattern.
 
-| Module           | Responsibility                                                                                 |
-| ---------------- | ---------------------------------------------------------------------------------------------- |
-| `main.cpp`       | Arduino entry point and timing for the main control loop                                       |
-| `drone.h/.cpp`   | Top-level drone state machine, startup sequence, target selection, and vehicle coordination    |
-| `radio.h/.cpp`   | RFM69 initialization, ground-station connection, command reception, and telemetry transmission |
-| `gyro.h/.cpp`    | BNO08x IMU initialization and quaternion-to-Euler conversion                                   |
-| `gimbal.h/.cpp`  | Gimbal servo control, mechanical correction, and position interpolation                        |
-| `error.h/.cpp`   | Error storage and system fault reporting                                                       |                    |
-| `configs.h/.cpp` | Versioned persistent settings in EEPROM: load, validate, migrate, and apply configuration      |
-| `battery.h/.cpp` | 4S LiPo pack voltage sampling, smoothing, and battery state classification                     |
-
-The `Drone` class coordinates the individual subsystems and tracks the overall state of the vehicle.
-
-For the binary USB and RFM69 endpoint reference used by dashboard clients, see
-[Dashboard Protocol Reference](docs/dashboard-protocol.md).
-
-Before contributing code, read the [Code Conventions](docs/code-conventions.md).
-It covers the module pattern, state ownership, the real-time constraints on the
-control loop, wire-format rules, and step-by-step recipes for common changes.
+| Module             | Responsibility                                                                                             |
+| ------------------ | ---------------------------------------------------------------------------------------------------------- |
+| `main.cpp`         | Arduino entry point: startup, servicing the subsystems, and the 10 Hz telemetry send                     |
+| `drone.h/.cpp`     | State machine, startup sequence, 1 kHz control-timer ISR, telemetry snapshot, link watchdog, status LED    |
+| `radio.h/.cpp`     | RFM69 bring-up, base-station link, packet definitions, command/config/heartbeat handling, status telemetry |
+| `usb.h/.cpp`       | Framed binary USB protocol: debug text, telemetry, radio relay, commands, configuration, heartbeat         |
+| `gyro.h/.cpp`      | BNO08x IMU setup, body-frame quaternion, world-frame acceleration, dead-reckoned velocity and position     |
+| `gimbal.h/.cpp`    | Gimbal servo output with lookup-table (bilinear) mechanical correction                                     |
+| `motor.h/.cpp`     | Top and bottom ESC output with trim offsets and safety guards                                              |
+| `battery.h/.cpp`   | 4S LiPo voltage sampling, smoothing and state classification                                               |
+| `configs.h/.cpp`   | Versioned persistent settings in EEPROM: load, validate, migrate, set and read                             |
+| `platform.h/.cpp`  | Compatibility shims for non-Teensy targets (Nucleo bench build)                                           |
+| `error.h/.cpp`     | Placeholder for the planned error buffer (currently commented out)                                         |
 
 ---
 
 ## System States
 
-The drone uses a state machine to control startup and operation.
+The drone uses a state machine to control startup and operation. The state values go out on the wire and are **not contiguous**.
 
-| State          | Description                                                         |
-| -------------- | ------------------------------------------------------------------- |
-| `BOOT`         | Initializes the controller and checks for a USB serial connection   |
-| `RADIO_SETUP`  | Initializes the RFM69 and waits for the ground station              |
-| `SENSOR_SETUP` | Initializes the IMU and other sensors                               |
-| `READY_ARMED`  | Startup is complete and the vehicle is ready for further commands   |
-| `FLIGHT`       | The vehicle is allowed to perform flight operations                 |
-| `FAULT_ERROR`  | A startup or runtime error has placed the system into a fault state |
+| Value | State           | Description                                                                 |
+| ----: | --------------- | --------------------------------------------------------------------------- |
+|     0 | `BOOT`          | Configures the status LED and sets up the battery monitor                   |
+|     1 | `RADIO_SETUP`   | Resets and configures the RFM69                                             |
+|     2 | `SENSOR_SETUP`  | Initializes the BNO08x IMU                                                  |
+|     3 | `CONTROL_SETUP` | Sets up the gimbal servos and ESCs and starts the 1 kHz control timer       |
+|     4 | `SAFE`          | All systems are up, but nothing is allowed to move. Startup ends here       |
+|    10 | `READY_ARMED`   | Gimbal movement allowed; motors held at idle                                |
+|    11 | `MAN_FLIGHT`    | Gimbal and motors follow manual commands                                    |
+|    12 | `AUTO_FLIGHT`   | Gimbal and motors driven by flight control. **Not implemented**; requests for it are refused |
+|   255 | `FAULT_ERROR`   | Unrecoverable fault. No transition out of it; a power cycle is required     |
 
-The vehicle advances through these states in order. A failure during radio or sensor initialization moves the system into `FAULT_ERROR`.
+Every state at or above `READY_ARMED` allows some movement, and the link watchdog enforces a timeout in all of them. Every state below `SAFE` is part of startup.
+
+After startup, state changes come from the ground station or dashboard as a requested state in the `HEARTBEAT` message (see [Link Watchdog and Heartbeat](#link-watchdog-and-heartbeat)). `Drone::requestState()` enforces these rules:
+
+* `FAULT_ERROR` refuses every transition.
+* Entering `SAFE` zeroes the motors.
+* Entering `MAN_FLIGHT` zeroes the motor targets before the state changes.
 
 ---
 
 ## Startup Control Flow
 
-The Arduino `setup()` function repeatedly calls `Drone::startup()` until the vehicle reaches `READY_ARMED`.
+`setup()` brings up the USB serial link, loads the persistent configuration from EEPROM, then calls `Drone::startup()` repeatedly until the vehicle reaches `SAFE`. Each startup stage is non-blocking, so the status LED and USB keep being serviced during startup.
 
-### 1. Boot and Debug Connection
+1. **`BOOT`**: configures the status LED pin and sets up the battery monitor. The firmware no longer waits for a USB connection.
+2. **`RADIO_SETUP`**: resets the RFM69, initializes the RadioHead driver, and sets 915 MHz, the shared encryption key and the configured transmit power (14–20 dBm, high-power mode). Startup waits only for the radio hardware. Finding the base station is a separate background step (see [Radio and Telemetry](#radio-and-telemetry)), so a missing ground station does not hold up startup. If `RadioEnabled` is `0`, this stage is skipped without touching the SPI bus.
+3. **`SENSOR_SETUP`**: initializes the BNO08x over I²C and enables the game rotation vector and linear acceleration reports at 200 Hz. If `GyroEnabled` is `0`, this stage is skipped. GPS setup is planned but not yet part of the sequence.
+4. **`CONTROL_SETUP`**: sets up the gimbal servos and ESCs (ESCs are held at their idle pulse width), then starts the control-loop timer.
+5. **`SAFE`**: startup is complete and `loop()` begins running.
 
-The flight controller first configures the status LED and checks for a USB serial connection.
-
-The current configuration does not wait for a Serial connection. This means startup progresses regardless of a outside connection. The vehicle will then sit idle in `READY/ARMED` until instructed otherwise. 
-
-Persistent configuration is implemented. Settings are stored in EEPROM, loaded during startup, and can be changed at runtime over USB or radio without rebuilding the firmware. See [Persistent Configuration](#persistent-configuration).
-
-### 2. Radio Initialization
-
-After the boot checks are complete, the drone enters `RADIO_SETUP`.
-
-The radio setup sequence:
-
-1. Resets the RFM69 module.
-2. Initializes the RadioHead driver.
-3. Configures the radio for 915 MHz.
-4. Applies the shared encryption key.
-5. Configures the high-power transmitter for 20 dBm.
-6. Sends the `AFCDrone` connection identifier.
-7. Waits for an acknowledgment from the ground station.
-
-If an acknowledgment is not received within one second, the connection attempt is retried.
-
-No flight or sensor setup is intended to occur until communication with the ground station has been established.
-
-### 3. Sensor Initialization
-
-After the radio connection is complete, the drone enters `SENSOR_SETUP`.
-
-The current sensor setup initializes the BNO08x inertial measurement unit over I²C and enables the stabilized rotation-vector report at 100 Hz.
-
-Planned or partially implemented initialization tasks include:
-
-* Gyroscope and IMU startup
-* Orientation-report configuration
-* Gimbal setup and self-test
-* Servo actuation checks
-* GPS startup and warmup
-
-GPS support is currently planned but is not enabled in the startup sequence.
-
-### 4. Ready State
-
-When all required sensors report that setup is complete, the drone enters `READY_ARMED`.
-
-At this point:
-
-* Radio configuration is complete.
-* The ground station has acknowledged the vehicle.
-* Required sensors have initialized.
-* The controller is ready to begin higher-level operation.
-
-Entering `READY_ARMED` does not automatically begin flight. A separate transition is expected before the vehicle enters the `FLIGHT` state.
+A failure in any stage moves the vehicle to `FAULT_ERROR`. In that state the firmware sends a `FAULT` debug message over USB once per second. It keeps reading incoming radio packets, but it sends no telemetry.
 
 ---
 
-## Main Control Loop
+## Main Loop and Control Loop
 
-The main loop is designed to run at approximately **1 kHz**, giving each cycle a target period of 1,000 microseconds.
+The firmware has two execution contexts. The rules that keep them safe from each other are in the [Code Conventions](docs/code-conventions.md) (sections 7 and 8).
 
-Each loop is intended to perform the following work:
+### Control loop (1 kHz, interrupt context)
 
-1. Receive and process radio commands.
-2. Read and update sensor data.
-3. Run stabilization and guidance calculations.
-4. Select the active command target.
-5. Update the gimbal and motor outputs.
-6. Queue telemetry for the ground station.
-7. Update error and status indicators.
-8. Record loop timing information.
-9. Wait until the 1,000-microsecond loop period has elapsed.
+A hardware `IntervalTimer` calls `Drone::update()` directly from its ISR every 1,000 µs. Because the ISR calls `update()` directly, the control loop keeps its timing no matter how long a pass through `loop()` takes. Each tick:
 
-The timing system tracks values such as:
+1. Reads the active setpoint (gimbal X/Y, top and bottom motor).
+2. Commands the gimbal; the signed 16-bit setpoint is divided by 1638, giving about ±20°.
+3. Commands the motors.
+4. Records a telemetry snapshot of the whole vehicle state at that instant.
 
-* Last loop execution time
-* Worst observed loop time
-* Best observed loop time
-* Rolling average loop time
+The ISR also measures its own timing: last, best, worst and rolling-average tick time, plus a count of missed ticks (ticks that overran 1,000 µs).
 
-The current `Drone::update()` function is a placeholder. The subsystem update calls and flight-control calculations are expected to be added there as development continues.
+Code that runs in interrupt context must not use I²C, SPI, Serial, heap allocation or `delay()`, and must not push to the radio or USB transmit queues.
+
+### Main loop (`loop()`)
+
+Each pass services, in order:
+
+1. Radio receive/transmit
+2. USB receive/transmit
+3. Reading the IMU
+4. Battery sampling
+5. The link watchdog
+6. The status LED
+
+Every 100 ms (about 10 Hz), `loop()` copies one telemetry snapshot from the control loop. It sends that snapshot as one USB `TELEMETRY` frame and as the radio `STATUS0`–`STATUS6` packets, so every packet in a frame describes the same instant.
+
+### Command setpoint
+
+`COMMAND` messages over USB or radio set the single active setpoint. The command packet still contains the `targSlot`/`activeSlot` flags from the earlier two-slot design, but the firmware currently ignores them.
 
 ---
 
-## Command Targets
+## Link Watchdog and Heartbeat
 
-The current control architecture provides two command target slots.
+The dashboard or ground station must send a `HEARTBEAT` message regularly, over either USB or radio, for the vehicle to keep moving. The heartbeat also carries the state the operator is requesting.
 
-A command from the ground station can:
+* The watchdog expires **100 ms** after the last heartbeat. A 20–50 ms heartbeat interval is recommended.
+* When it expires, the gimbal and motor outputs fail safe within one control tick. The vehicle then drops to `SAFE` and latches a `TRIPPED` flag, which is reported in telemetry and shown on the status LED.
+* The requested state is **edge-triggered**: the firmware acts on it only when it changes. After a trip, the dashboard must request `SAFE` and then request the flight state again, so the vehicle never re-arms on its own when the link comes back.
+* A move up out of `SAFE` is refused until the vehicle has been in `SAFE` for at least 500 ms.
+* Motor output is allowed only in `MAN_FLIGHT` with the watchdog fed. Gimbal output is allowed at or above `READY_ARMED` with the watchdog fed.
 
-* Update one target slot
-* Select which target slot is active
-* Set the requested gimbal X position
-* Set the requested gimbal Y position
-* Set two motor-speed targets
-
-This allows the ground station to prepare a new target separately and then switch the active target.
-
-Gimbal commands are transmitted as signed integer values and converted to degrees by the flight controller. The gimbal mechanism currently operates over an approximately ±20-degree commanded range.
-
-The motor and roll-control portions of the command interface are still being completed.
+The full rules a dashboard implementer needs are in the [Dashboard Protocol Reference](docs/dashboard-protocol.md#link-watchdog-and-heartbeat).
 
 ---
 
 ## Radio and Telemetry
 
-The drone uses an RFM69 radio operating at 915 MHz.
+The drone uses an RFM69 radio at 915 MHz with encryption. Every radio message has an 8-byte payload, and the packet number and message type are carried in the RadioHead header.
 
-Normal radio messages contain:
+| Type | Message | Direction |
+| ---: | --- | --- |
+| 0 | `SETUP` (base-station ping/ACK) | Both |
+| 1–7 | `STATUS0`–`STATUS6`: system status and watchdog flags, gimbal, motors/battery/RSSI, quaternion, acceleration, velocity, position | Drone → ground |
+| 8 | `COMMAND` | Ground → drone |
+| 9 | `CONFIG` (one key per packet) | Both |
+| 10 | `HEARTBEAT` | Ground → drone |
 
-* A packet sequence number
-* A message-type identifier
-* An 8-byte payload
+After the radio hardware is up, the drone sends a connection ping and repeats it every second until the base station replies with an ACK. A link that drops and comes back reconnects on its own.
 
-Defined message categories include:
+On USB, the drone uses a framed binary protocol (sync bytes, sequence number, type, length, CRC-16). It carries debug text, a 64-byte telemetry record, a relay of every radio packet sent or received, commands, batched configuration, and heartbeats.
 
-* General system status
-* Gimbal and actuator status
-* Orientation quaternion
-* Acceleration
-* Velocity
-* Position
-* GPS coordinates
-* Ground-station commands
-* Configuration data
-
-General system telemetry is intended to report:
-
-* Average loop time
-* Maximum loop time
-* Vehicle runtime
-* Radio signal strength
-* Current drone state
-
-Several telemetry messages are defined but are not yet fully populated by the current firmware.
-
-See the Radio API documentation for the detailed packet and payload definitions.
+Packet layouts, scale factors and queue behavior are documented in the [Dashboard Protocol Reference](docs/dashboard-protocol.md).
 
 ---
 
 ## Persistent Configuration
 
-Configuration values are retained in EEPROM and are loaded during startup. All
-configuration commands use a signed 32-bit integer value; boolean values use
-`0` for disabled and `1` for enabled. A value outside its accepted range is
-rejected with `INVALID_VALUE`. Configuration changes are rejected while the
-vehicle is in `FLIGHT`.
+Settings are stored in EEPROM with a magic value, a format version and a checksum. They are loaded at startup and can be read or changed at runtime over USB (up to nine keys per request) or radio (one key per packet). Changes are rejected while the vehicle is in `MAN_FLIGHT` or `AUTO_FLIGHT`. The current format is `CONFIG_VERSION` 3.
 
-### Format Version and Migration
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `DebugMode` | 0 | Stored but not yet used by any code |
+| `TxPowerDbm` | 20 | RFM69 transmit power (14–20 dBm) |
+| `UsbRelayEnabled` | 1 | Relay radio traffic over USB |
+| `RadioEnabled` | 1 (0 on Nucleo) | Bring up and service the radio |
+| `SkipRadioHandshake` | 1 | Skip the base-station handshake |
+| `GimbalPitchOffset` / `GimbalYawOffset` | 90 / 89 | Per-airframe servo trim, in degrees |
+| `Motor1Offset` / `Motor2Offset` | 0 / 0 | Top/bottom motor speed trim |
+| `GyroEnabled` | 1 (0 on Nucleo) | Bring up and service the IMU |
 
-The stored image starts with a magic value, a format version, and a checksum.
-`config_load()` accepts it only when all three are valid for the current
-`CONFIG_VERSION`:
+When the firmware finds an EEPROM image from an older format version, it migrates the image forward instead of resetting it, so the gimbal trim is kept. Any change to `PersistentConfig` must increment `CONFIG_VERSION` and add a matching case to `migrate()`. The [Code Conventions](docs/code-conventions.md#adding-a-configuration-setting) give step-by-step instructions, and wire IDs, value ranges and packet layouts are in the [Dashboard Protocol Reference](docs/dashboard-protocol.md).
 
-| Stored image | Result |
-| --- | --- |
-| Magic, version, and checksum all valid | Loaded as-is |
-| Version differs from `CONFIG_VERSION` | `config_migrate()` runs |
-| Version matches but the checksum fails | Reset to defaults and re-saved |
+---
 
-`CONFIG_VERSION` is currently `2`. Version 2 added `DebugMode` and moved
-`TxPowerDbm` after the boolean settings, which changed both the stored layout
-and every wire ID above `0`. `config_migrate()` re-reads a version 1 image
-under its original layout, validates it against that layout's own checksum, and
-carries the settings forward, so a per-airframe gimbal trim survives the
-upgrade instead of needing to be re-measured. An image that fails that
-validation falls back to defaults.
+## Battery Monitoring
 
-Any change to `PersistentConfig` must increment `CONFIG_VERSION` and add a
-matching case to `config_migrate()`.
+The 4S LiPo pack voltage is read through a 5:1 resistor divider into a 12-bit ADC input and smoothed with a 16-sample exponential moving average. The firmware sorts the result into `CRITICAL_BATTERY`, `LOW_BATTERY`, `MIDPOINT`, `MAXIMUM`, or `FAULT_ERROR` for an implausible reading. The smoothed voltage is reported in telemetry.
 
-| Key | Current wire ID | Accepted value | Default | Effect |
-| --- | ---: | --- | ---: | --- |
-| `DebugMode` | 0 | 0 or 1 | 0 | Persisted, but does not yet gate any behavior. |
-| `TxPowerDbm` | 1 | 14–20 | 20 | RFM69 transmit power in dBm. |
-| `UsbRelayEnabled` | 2 | 0 or 1 | 1 | Enables USB communication handling. |
-| `RadioEnabled` | 3 | 0 or 1 | 1 | Enables periodic radio processing. |
-| `SkipRadioHandshake` | 4 | 0 or 1 | 1 | Skips the radio connection handshake when enabled. |
-| `GimbalPitchOffset` | 5 | 60–120 | 90 | Pitch-servo center/setpoint offset in degrees. |
-| `GimbalYawOffset` | 6 | 60–120 | 89 | Yaw-servo center/setpoint offset in degrees. |
-| `Motor1Offset` | 7 | −100–100 | 0 | Top-motor speed adjustment. |
-| `Motor2Offset` | 8 | −100–100 | 0 | Bottom-motor speed adjustment. |
-
-Wire IDs are the `ConfigKey` enum values and shift whenever a key is inserted.
-`CONFIG_VERSION` is bumped in the same change so an out-of-date client is
-rejected with `UNKNOWN_VERSION` instead of silently writing the wrong setting.
-
-The USB configuration request uses a 16-bit little-endian key and a 32-bit
-little-endian signed value for each entry. A `SET` request can contain up to
-nine `{key, value}` entries; the controller applies all valid entries, writes
-EEPROM at most once, and replies with one status entry per requested key.
-
-A `READ` request uses the same entry layout, but ignores each entry's value and
-can request up to eight keys. The `READ_RESPONSE` contains `{key, status,
-value}` for each requested key. Eight read results exactly fill the 60-byte USB
-payload limit.
-
-### Radio Configuration Packets
-
-Radio configuration uses `radio_MessageType::CONFIG` (`9`) and carries one
-configuration value per 8-byte packet. It uses the same keys, accepted values,
-and integer representation listed above.
-
-| Byte | Field | Request meaning |
-| ---: | --- | --- |
-| 0 | `version` | Must equal `CONFIG_VERSION` (currently `2`). |
-| 1 | `state.operation` | `READ` (`1`) or `SET` (`2`). |
-| 2–3 | `configKey` | `ConfigKey` as a 16-bit little-endian value. |
-| 4–7 | `value` | 32-bit little-endian value. It is ignored for `READ`; it is the requested signed configuration value for `SET`. |
-
-The drone responds using the same `CONFIG` message type. Response byte 1 is a
-`ConfigResult` status, and a successful `READ` response returns the current
-value in bytes 4–7. Because the radio payload is fixed at eight bytes, batch
-configuration is available only over USB; send one radio packet for each
-configuration key.
-
-`ConfigOp::ZERO_ALL` (`255`) is reserved in the operation enum but is not
-handled on either transport; sending it returns `UNKNOWN_OP`.
+`BATTERY_PIN` is not yet assigned. Until it is, the monitor sends a warning over USB and reports 0 V. See [Battery Monitor](docs/battery/batteryinfo.md) for the hardware and thresholds.
 
 ---
 
 ## Error Handling
 
-Errors are stored in an internal error buffer. Each error contains:
+Today, faults are reported through `DEBUG_TEXT` messages over USB and by moving to `FAULT_ERROR` when a startup stage fails.
 
-* An error code
-* A severity level
-
-Severity levels are defined as:
-
-| Severity | Meaning           |
-| -------: | ----------------- |
-|      `0` | Low               |
-|      `1` | Medium            |
-|      `2` | High              |
-|      `3` | Critical or fatal |
-
-Current radio initialization errors include:
-
-* Radio driver initialization failure
-* Radio frequency configuration failure
-
-An initialization failure moves the drone into `FAULT_ERROR`.
-
-The intended design is for errors to be reported through every available communication interface, including USB serial and the radio. Radio error reporting and persistent internal logging are still under development.
+A structured error system is planned: an internal buffer of errors, each with a code and a severity (low, medium, high, critical), reported over both USB and radio. The interface sketched in [include/error.h](include/error.h) is currently commented out.
 
 ---
 
 ## LED Indicators
 
-The status LED patterns provide a visual indication of the current system state.
+The status LED is updated on every pass through `loop()` and during startup.
 
-| Pattern      |         Timing | State          | Meaning                                                                    |
-| ------------ | -------------: | -------------- | -------------------------------------------------------------------------- |
-| Blink        |         100 ms | `RADIO_SETUP`  | The controller is initializing the radio or waiting for the ground station |
-| Blink        |         300 ms | `SENSOR_SETUP` | Radio setup is complete and sensors are being initialized                  |
-| Fade         | 2,000 ms cycle | `READY_ARMED`  | Startup is complete and the vehicle is ready                               |
-| Double flash | 1,200 ms cycle | `FLIGHT`       | The vehicle is in a flight-capable operating state                         |
-| Rapid blink  |          50 ms | `FAULT_ERROR`  | The controller has detected a fault                                        |
-
-The LED behavior has been defined in the flight software, but the periodic call that updates the indicator is still being integrated into the main control loop.
+| Pattern                         |         Timing | State / condition          | Meaning                                                  |
+| ------------------------------- | -------------: | -------------------------- | -------------------------------------------------------- |
+| Blink                           |         100 ms | `RADIO_SETUP`              | Bringing up the radio                                    |
+| Blink                           |         300 ms | `SENSOR_SETUP`             | Initializing sensors                                     |
+| Breathing fade                  |   2,000 ms cycle | `SAFE`                   | All systems up, no movement allowed                      |
+| Blink                           |         500 ms | `READY_ARMED` (and others) | Gimbal movement allowed                                  |
+| Double flash                    | 1,200 ms cycle | `MAN_FLIGHT`/`AUTO_FLIGHT` | Flight state                                             |
+| Triple flash, then pause        | 1,500 ms cycle | Watchdog tripped           | Link was lost while movement was allowed; overrides the state pattern until the operator requests `SAFE` |
+| Rapid blink                     |          50 ms | `FAULT_ERROR`              | Unrecoverable fault                                      |
 
 ---
 
@@ -339,35 +245,47 @@ The LED behavior has been defined in the flight software, but the periodic call 
 
 The wiring diagram was created using KiCad 9.0 and is maintained in the [AFC Wiring Diagram repository](https://github.com/Keweenaw-Propulsion-Laboratory/AFC-Wiring-Diagram).
 
+### Teensy 4.1 Pin Assignments
+
+| Function | Pin | Defined in | Notes |
+| --- | ---: | --- | --- |
+| Gimbal pitch servo | 24 | `gimbal.cpp` | |
+| Gimbal yaw servo | 25 | `gimbal.cpp` | |
+| Top motor ESC | 28 | `motor.cpp` | 1000 µs idle, 1333–2000 µs running |
+| Bottom motor ESC | 29 | `motor.cpp` | 1000 µs idle, 1333–2000 µs running |
+| RFM69 chip select | 10 | `radio.cpp` | SPI |
+| RFM69 interrupt | 40 | `radio.cpp` | |
+| RFM69 reset | 41 | `radio.cpp` | |
+| BNO08x IMU | I²C (`Wire`) | `gyro.cpp` | Default I²C pins |
+| Status LED | 9 | `drone.cpp` | Not yet wired on the flight computer |
+| Battery sense | — | `battery.cpp` | Not yet assigned (`BATTERY_PIN = -1`) |
+
 ---
 
 ## Current Development Status
 
 The current firmware includes:
 
-* A structured startup state machine
-* USB serial detection and debug output
-* RFM69 configuration and connection-handshake logic
-* BNO08x IMU initialization
-* Quaternion-to-Euler conversion
-* Gimbal servo control
-* Bilinear interpolation for gimbal correction
-* Two command target slots
-* Message definitions for commands and telemetry
-* Error buffering
-* Loop-timing infrastructure
-* Versioned persistent configuration in EEPROM, with migration
-* Configuration set/read over USB (batched) and radio (single key)
-* State-based LED patterns
+* A non-blocking startup state machine with `SAFE`, `READY_ARMED` and `MAN_FLIGHT` operating states
+* A 1 kHz control loop driven by a hardware timer, with timing and missed-tick statistics
+* 10 Hz telemetry over USB and radio, with every frame taken from one snapshot of the control loop
+* A link watchdog with edge-triggered heartbeat state requests, a latched trip flag, and a dwell time before leaving `SAFE`
+* RFM69 setup, with a background base-station link that reconnects on its own
+* A framed binary USB protocol with radio relay, commands, configuration and heartbeat
+* BNO08x orientation, world-frame acceleration, and dead-reckoned velocity and position
+* Gimbal servo control with bilinear lookup-table correction
+* Manual motor control with trim offsets and safety guards
+* Battery voltage monitoring and classification
+* Versioned persistent configuration in EEPROM, with migration from versions 1 and 2
+* State-based LED patterns, including a separate pattern for a watchdog trip
+* A Nucleo-L152RE bench build for testing without flight hardware
 
 Work still in progress includes:
 
-* Integrating subsystem updates into `Drone::update()`
-* Completing motor control
-* Completing roll control
-* Scheduling telemetry messages
-* Processing live IMU data in the main loop
-* Implementing command timeouts and failsafe behavior
-* Completing GPS support
-* Reporting errors over the radio
-* Finalizing the transition from `READY_ARMED` to `FLIGHT`
+* Writing the flight-control algorithm and implementing `AUTO_FLIGHT`
+* Replacing "drop to `SAFE`" with a link-loss failsafe that keeps a flying vehicle under control
+* Using the heartbeat's `enableMotors` / `enableGimbal` bits
+* Completing GPS support (the GPS fields currently carry fixed test values)
+* Implementing the structured error buffer and reporting errors over radio
+* Assigning the battery-sense pin and wiring the status LED
+* Moving the remaining modules over to the [code conventions](docs/code-conventions.md#16-migration-status)
