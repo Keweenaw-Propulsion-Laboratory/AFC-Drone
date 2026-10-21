@@ -5,8 +5,8 @@
 #include <Arduino.h>
 
 namespace Battery{
-    // Analog pin value, set to -1 until the hardware pin is configured.
-    static constexpr int BATTERY_PIN = -1; // Analog input pin
+    // Analog pin value
+    static constexpr int BATTERY_PIN = PIN_A9; // Analog input pin
     static constexpr int ADC_RESOLUTION_BITS = 12;   // ADC resolution (bits)
     static constexpr float VOLTAGE_ALPHA = 1.0f / 16.0f; // 16-sample equivalent rolling average
     static constexpr int MIN_SAMPLE_PERIOD_MS = 10; // 10 ms minimum between samples.
@@ -40,8 +40,10 @@ namespace Battery{
 
     // Get the current voltage of the battery *Mainly copied from ArduinoDocs for analogRead()*
     static constexpr float V_REF = 3.3f;     // ADC reference voltage; adjust for the board in use
-    static constexpr float R1 = 10000.0f;    // Ohms: analog input to ground (lower resistor)
-    static constexpr float R2 = 50000.0f;    // Ohms: battery positive to analog input (upper resistor)
+
+    // Resistance values read from multimeter (ideal = 50k and 10k)
+    static constexpr float R1 = 9980.0f;    // Ohms: analog input to ground (lower resistor)
+    static constexpr float R2 = 49800.0f;    // Ohms: battery positive to analog input (upper resistor)
     // Vout = Vin * R1 / (R1 + R2); recover battery voltage with the inverse ratio.
     static constexpr float DIVIDER_RATIO = (R1 + R2) / R1;
     static constexpr int ADC_STEPS = (1 << ADC_RESOLUTION_BITS) - 1; // Number of steps (2^ADC_RESOLUTION_BITS - 1)
