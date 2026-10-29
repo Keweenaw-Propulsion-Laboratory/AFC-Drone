@@ -17,6 +17,7 @@
 * Note that a fully charged pack (16.8 V) puts 3.36 V on the pin and saturates
 * the ADC, so anything above 16.5 V reads as 16.5 V. See
 * docs/battery/batteryinfo.md for the full divider notes and fault thresholds.
+* 0 volts 0 amps, 3.3 volts is 100 amps
 *
 * @warning BATTERY_PIN in battery.cpp is currently -1 (unassigned). Until a real
 *          pin is set, setup() reports the problem over USB and leaves the module
