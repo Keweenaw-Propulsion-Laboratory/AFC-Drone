@@ -7,6 +7,8 @@
 #include "motor.h"
 #include "battery.h"
 
+#include <Adafruit_NeoPixel.h>
+
 static constexpr int CONTROL_LOOP_HZ = 1000;
 static constexpr int CONTROL_LOOP_US = (1000000 / CONTROL_LOOP_HZ);
 
@@ -133,6 +135,98 @@ void getTelemetry(Telemetry_t& out) {
 
 // --- LED Logic ---
 
+// Set this to the GPIO connected to DIN on light 1; -1 disables NeoPixels.
+// Wire light 1 DOUT to light 2 DIN. This chain contains two individual pixels.
+// Use a separate pin from STATUS_LED, which still drives the original LED.
+static constexpr int16_t NEOPIXEL_DATA_PIN = -1;
+// Assumed RGBW byte order; change this if your specific lights use another order.
+static constexpr neoPixelType NEOPIXEL_TYPE = NEO_GRBW + NEO_KHZ800;
+static constexpr uint16_t NEOPIXEL_COUNT = 2;
+
+struct NeoLightSettings {
+    uint8_t red;        // Each RGBW channel: 0 (off) to 255 (full).
+    uint8_t green;
+    uint8_t blue;
+    uint8_t white;
+    uint8_t brightness; // Independent per light: 0 (off) to 255 (full).
+    uint16_t onMs;     // Blink on time, 0..65535 milliseconds.
+    uint16_t offMs;    // Blink off time; 0 = steady, ignoring onMs.
+};
+
+/**
+ * Settings are in chain order: [0] is light 1, [1] is light 2.
+ * A state change restarts both blink cycles on. onMs = 0 with offMs > 0
+ * keeps a light off. No delays: call repeatedly from loop()/startup().
+ */
+static void updateNeoLights(
+    const NeoLightSettings (&settings)[NEOPIXEL_COUNT],
+    bool watchdogPattern = false) {
+    if (NEOPIXEL_DATA_PIN < 0) {
+        return;
+    }
+
+    static Adafruit_NeoPixel pixels(NEOPIXEL_COUNT, NEOPIXEL_DATA_PIN, NEOPIXEL_TYPE);
+    static bool initialized = false;
+    if (!initialized) {
+        if (pixels.numPixels() != NEOPIXEL_COUNT || !pixels.begin()) {
+            return;
+        }
+        initialized = true;
+    }
+
+    static bool patternStarted = false;
+    static States previousState = States::BOOT;
+    static bool previousWatchdog = false;
+    static uint32_t cycleStartMs[NEOPIXEL_COUNT] = {};
+    static bool needsShow = true;
+
+    const uint32_t nowMs = millis();
+    const States state = currentState;
+    if (!patternStarted || state != previousState || watchdogPattern != previousWatchdog) {
+        for (uint16_t i = 0; i < NEOPIXEL_COUNT; ++i) {
+            cycleStartMs[i] = nowMs;
+        }
+        previousState = state;
+        previousWatchdog = watchdogPattern;
+        patternStarted = true;
+    }
+
+    for (uint16_t i = 0; i < NEOPIXEL_COUNT; ++i) {
+        const NeoLightSettings& light = settings[i];
+        bool on = true;
+        if (light.offMs > 0) {
+            const uint32_t cycleMs = static_cast<uint32_t>(light.onMs) + light.offMs;
+            const uint32_t phaseMs = (nowMs - cycleStartMs[i]) % cycleMs;
+            // Re-anchor each cycle so blinking also survives millis() rollover.
+            cycleStartMs[i] = nowMs - phaseMs;
+            on = phaseMs < light.onMs;
+        }
+
+        // setBrightness() affects the whole chain. Scale each light's channels
+        // ourselves, keeping the library's global brightness at its default 255.
+        const auto scale = [&light](uint8_t channel) -> uint8_t {
+            return static_cast<uint8_t>(
+                (static_cast<uint16_t>(channel) * light.brightness + 127U) / 255U);
+        };
+        const uint32_t color = on
+            ? pixels.Color(scale(light.red), scale(light.green),
+                           scale(light.blue), scale(light.white))
+            : 0;
+
+        if (pixels.getPixelColor(i) != color) {
+            pixels.setPixelColor(i, color);
+            needsShow = true;
+        }
+    }
+
+    // show() briefly masks interrupts (~80 us for two RGBW pixels). Transmit
+    // only changed frames, and leave the latch interval to subsequent calls.
+    if (needsShow && pixels.canShow()) {
+        pixels.show();
+        needsShow = false;
+    }
+}
+
 /**
  * True once analogWrite() has handed STATUS_LED to a timer.
  *
@@ -242,6 +336,13 @@ static void doubleFlash() {
  * likely to be read next to.
  */
 static void tripleFlash() {
+    // The watchdog returns before the state switch. Give the NeoPixels an
+    // explicit amber alert here so they cannot retain the previous flight color.
+    //                    R    G   B  W  Brightness  OnMs  OffMs
+    updateNeoLights({{255, 96,  0, 0,     96,         80,   120},  // Light 1
+                     {255, 96,  0, 0,     96,         80,   120}}, // Light 2
+                    true);
+
     const uint32_t cycleDuration = 1500; // Total duration of the pattern in ms
     const uint32_t strobeSpacing = 200;  // Start to start of each strobe
     const uint32_t strobeOn = 80;        // Lit portion of each strobe
@@ -272,31 +373,86 @@ void updateLEDS() {
     }
 
     switch (currentState) {
+        // Example colors/timings: edit each light independently in chain order.
+        // Each row: {Red, Green, Blue, White, Brightness, OnMs, OffMs}.
+        // RGBW/brightness: 0..255. Times: 0..65535 ms. OffMs = 0 means steady.
+        // The original STATUS_LED patterns below continue alongside the chain.
+        case States::BOOT:
+            updateNeoLights({
+                {  0,   0, 255,   0,  64,    0,    0}, // Light 1: steady blue
+                {  0,   0, 255,   0,  64,    0,    0}  // Light 2: steady blue
+            });
+            break;
+
         case States::RADIO_SETUP :
+            updateNeoLights({
+                {  0,   0, 255,   0,  64,  100,  100}, // Light 1: blinking blue
+                {  0,   0,   0, 255,  32,    0,    0}  // Light 2: steady white
+            });
             blinkInterval = 100; // Blink every 100 ms during radio setup
             break;
         
         case States::SENSOR_SETUP :
+            updateNeoLights({
+                {255,   0, 255,   0,  64,  300,  300}, // Light 1: blinking purple
+                {255,   0, 255,   0,  64,  600,  600}  // Light 2: slower purple
+            });
             blinkInterval = 300; // Blink every 300 ms during sensor setup
             break;
 
+        case States::CONTROL_SETUP:
+            updateNeoLights({
+                {  0, 255, 255,   0,  64,  200,  200}, // Light 1: blinking cyan
+                {  0, 255, 255,   0,  64,    0,    0}  // Light 2: steady cyan
+            });
+            break;
+
         case States::SAFE :
+            updateNeoLights({
+                {  0, 255,   0,   0,  48,    0,    0}, // Light 1: steady green
+                {  0, 255,   0,   0,  48,    0,    0}  // Light 2: steady green
+            });
             ledFader();
             return;
 
         case States::READY_ARMED:
+            updateNeoLights({
+                {255,  96,   0,   0,  96,  500,  500}, // Light 1: blinking amber
+                {255,  96,   0,   0,  96,  500,  500}  // Light 2: blinking amber
+            });
             blinkInterval = 500;
             break;
 
         case States::MAN_FLIGHT  :
+            updateNeoLights({
+                {255,   0,   0,   0,  96,    0,    0}, // Light 1: steady red
+                {  0, 255,   0,   0,  96,    0,    0}  // Light 2: steady green
+            });
+            doubleFlash();
+            return;
+
         case States::AUTO_FLIGHT :
+            updateNeoLights({
+                {255,   0,   0,   0,  96,  100,  900}, // Light 1: flashing red
+                {  0, 255,   0,   0,  96,  250,  750}  // Light 2: flashing green
+            });
             doubleFlash();
             return;
 
         case States::FAULT_ERROR :
+            updateNeoLights({
+                {255,   0,   0,   0, 128,   50,   50}, // Light 1: fast red
+                {255,   0,   0,   0, 128,   50,   50}  // Light 2: fast red
+            });
             blinkInterval = 50; // PaNiC
+            break;
+
         default :
-            break;    
+            updateNeoLights({
+                {  0,   0,   0,   0,   0,    0,    0}, // Light 1: off
+                {  0,   0,   0,   0,   0,    0,    0}  // Light 2: off
+            });
+            break;
         }
 
     if (millis() - lastLEDToggle >= blinkInterval) {
