@@ -138,28 +138,38 @@ void getTelemetry(Telemetry_t& out) {
 // Set this to the GPIO connected to DIN on light 1; -1 disables NeoPixels.
 // Wire light 1 DOUT to light 2 DIN. This chain contains two individual pixels.
 // Use a separate pin from STATUS_LED, which still drives the original LED.
-static constexpr int16_t NEOPIXEL_DATA_PIN = -1;
+static constexpr int16_t NEOPIXEL_DATA_PIN = 25;
 // Assumed RGBW byte order; change this if your specific lights use another order.
 static constexpr neoPixelType NEOPIXEL_TYPE = NEO_GRBW + NEO_KHZ800;
 static constexpr uint16_t NEOPIXEL_COUNT = 2;
+// Bound refresh work; flash timing is configured independently of breathe timing.
+static constexpr uint32_t NEOPIXEL_FRAME_MS = 20;
+static constexpr uint16_t NEOPIXEL_MIN_BREATHE_MS = 1000;
+
+enum class NeoLightPattern : uint8_t { SOLID, BREATHE, FLASH };
 
 struct NeoLightSettings {
     uint8_t red;        // Each RGBW channel: 0 (off) to 255 (full).
     uint8_t green;
     uint8_t blue;
     uint8_t white;
-    uint8_t brightness; // Independent per light: 0 (off) to 255 (full).
-    uint16_t onMs;     // Blink on time, 0..65535 milliseconds.
-    uint16_t offMs;    // Blink off time; 0 = steady, ignoring onMs.
+    uint8_t brightness; // Peak per light: 0 (off) to 255 (full).
+    uint16_t onMs;      // Breathe cycle or duration of each flash, in milliseconds.
+    uint16_t offMs;     // Dark pause after the breathe cycle or final flash.
+    uint8_t minimumBrightness = 0; // Breathe floor, 0..brightness; offMs = 0 stays lit.
+    uint8_t flashCount = 1;        // Number of flashes before the final dark pause.
+    uint16_t flashGapMs = 0;      // Dark gap between flashes within one group.
 };
 
 /**
  * Settings are in chain order: [0] is light 1, [1] is light 2.
- * A state change restarts both blink cycles on. onMs = 0 with offMs > 0
- * keeps a light off. No delays: call repeatedly from loop()/startup().
+ * Each light has its own color, brightness and timing. A state/pattern change
+ * restarts the cycles; SOLID applies immediately and BREATHE starts at its floor.
+ * No delays: call repeatedly from loop()/startup().
  */
 static void updateNeoLights(
     const NeoLightSettings (&settings)[NEOPIXEL_COUNT],
+    NeoLightPattern pattern = NeoLightPattern::BREATHE,
     bool watchdogPattern = false) {
     if (NEOPIXEL_DATA_PIN < 0) {
         return;
@@ -177,41 +187,75 @@ static void updateNeoLights(
     static bool patternStarted = false;
     static States previousState = States::BOOT;
     static bool previousWatchdog = false;
+    static NeoLightPattern previousPattern = NeoLightPattern::BREATHE;
     static uint32_t cycleStartMs[NEOPIXEL_COUNT] = {};
+    static uint32_t lastFrameMs = 0;
     static bool needsShow = true;
 
     const uint32_t nowMs = millis();
     const States state = currentState;
-    if (!patternStarted || state != previousState || watchdogPattern != previousWatchdog) {
+    const bool patternChanged = !patternStarted || state != previousState ||
+                                watchdogPattern != previousWatchdog || pattern != previousPattern;
+    if (patternChanged) {
         for (uint16_t i = 0; i < NEOPIXEL_COUNT; ++i) {
             cycleStartMs[i] = nowMs;
         }
         previousState = state;
         previousWatchdog = watchdogPattern;
+        previousPattern = pattern;
         patternStarted = true;
     }
 
+    if (!patternChanged && nowMs - lastFrameMs < NEOPIXEL_FRAME_MS) {
+        return;
+    }
+    lastFrameMs = nowMs;
+
     for (uint16_t i = 0; i < NEOPIXEL_COUNT; ++i) {
         const NeoLightSettings& light = settings[i];
-        bool on = true;
-        if (light.offMs > 0) {
-            const uint32_t cycleMs = static_cast<uint32_t>(light.onMs) + light.offMs;
+        uint8_t brightness = 0;
+        if (pattern == NeoLightPattern::SOLID) {
+            brightness = light.brightness;
+        } else if (pattern == NeoLightPattern::BREATHE && light.onMs > 0) {
+            const uint32_t pulseMs = light.onMs < NEOPIXEL_MIN_BREATHE_MS
+                ? NEOPIXEL_MIN_BREATHE_MS : light.onMs;
+            const uint32_t cycleMs = pulseMs + light.offMs;
             const uint32_t phaseMs = (nowMs - cycleStartMs[i]) % cycleMs;
-            // Re-anchor each cycle so blinking also survives millis() rollover.
+            // Re-anchor each cycle so the animation survives millis() rollover.
             cycleStartMs[i] = nowMs - phaseMs;
-            on = phaseMs < light.onMs;
+            if (phaseMs < pulseMs) {
+                const uint8_t angle = static_cast<uint8_t>(192U + phaseMs * 256U / pulseMs);
+                uint8_t envelope = Adafruit_NeoPixel::sine8(angle);
+                const uint8_t floor = light.minimumBrightness < light.brightness
+                    ? light.minimumBrightness : light.brightness;
+                if (floor > 0) {
+                    // Squaring the curve shortens the bright crest and spends
+                    // more time near the floor, without floating point work.
+                    envelope = static_cast<uint8_t>(
+                        (static_cast<uint16_t>(envelope) * envelope + 127U) / 255U);
+                }
+                brightness = static_cast<uint8_t>(floor +
+                    ((light.brightness - floor) * envelope + 127U) / 255U);
+            }
+        } else if (pattern == NeoLightPattern::FLASH && light.onMs > 0 && light.flashCount > 0) {
+            const uint32_t spacingMs = static_cast<uint32_t>(light.onMs) + light.flashGapMs;
+            const uint32_t activeMs = static_cast<uint32_t>(light.flashCount) * light.onMs +
+                static_cast<uint32_t>(light.flashCount - 1) * light.flashGapMs;
+            const uint32_t phaseMs = (nowMs - cycleStartMs[i]) % (activeMs + light.offMs);
+            cycleStartMs[i] = nowMs - phaseMs;
+            if (phaseMs < activeMs && phaseMs % spacingMs < light.onMs) {
+                brightness = light.brightness;
+            }
         }
 
         // setBrightness() affects the whole chain. Scale each light's channels
         // ourselves, keeping the library's global brightness at its default 255.
-        const auto scale = [&light](uint8_t channel) -> uint8_t {
+        const auto scale = [brightness](uint8_t channel) -> uint8_t {
             return static_cast<uint8_t>(
-                (static_cast<uint16_t>(channel) * light.brightness + 127U) / 255U);
+                (static_cast<uint16_t>(channel) * brightness + 127U) / 255U);
         };
-        const uint32_t color = on
-            ? pixels.Color(scale(light.red), scale(light.green),
-                           scale(light.blue), scale(light.white))
-            : 0;
+        const uint32_t color = pixels.Color(scale(light.red), scale(light.green),
+                                            scale(light.blue), scale(light.white));
 
         if (pixels.getPixelColor(i) != color) {
             pixels.setPixelColor(i, color);
@@ -252,7 +296,9 @@ static void ledWrite(bool on) {
 }
 
 // The total time in milliseconds for one full breathe cycle (inhale + exhale)
-static constexpr uint32_t BREATHE_PERIOD_MS = 2000;
+static constexpr uint32_t BREATHE_PERIOD_MS = 4000;
+static constexpr uint32_t BREATHE_PAUSE_MS = 2000;
+static constexpr uint8_t STATUS_LED_FADE_PEAK = 32;
 
 /**
  * One full period of 127.5 * (1 + sin(theta)), rounded to 8-bit duty cycles.
@@ -263,8 +309,8 @@ static constexpr uint32_t BREATHE_PERIOD_MS = 2000;
  * A table keeps the fader off the floating point path. The nucleo_l152re bench
  * target is a Cortex-M3 with no FPU, so the old double-precision sin() was a
  * software call costing hundreds of cycles out of a loop() that has to fit
- * between 1 kHz control ticks. 128 steps over the 2 s period is a new duty
- * cycle every ~15.6 ms, changing by at most 7 counts - smooth to the eye.
+ * between 1 kHz control ticks. The table is scaled to STATUS_LED_FADE_PEAK
+ * before use, with a dark pause between fades.
  */
 static const uint8_t BREATHE_TABLE[128] = {
     128, 134, 140, 146, 152, 158, 165, 170,
@@ -286,41 +332,25 @@ static const uint8_t BREATHE_TABLE[128] = {
 };
 
 static void ledFader() {
-    // Collapse the infinite timeline of millis() into one breathe cycle, then
-    // scale that into a table index. The multiply happens first so the whole
-    // thing stays in integers; 1999 * 128 is nowhere near overflowing 32 bits.
-    uint32_t phase = millis() % BREATHE_PERIOD_MS;
-    uint32_t index = (phase * 128) / BREATHE_PERIOD_MS;
+    const uint32_t phase = millis() % (BREATHE_PERIOD_MS + BREATHE_PAUSE_MS);
+    uint8_t level = 0;
+    if (phase < BREATHE_PERIOD_MS) {
+        // Index 96 starts at zero, avoiding a jump when the dark pause ends.
+        const uint32_t index = ((phase * 128) / BREATHE_PERIOD_MS + 96) % 128;
+        level = static_cast<uint8_t>(
+            (static_cast<uint16_t>(BREATHE_TABLE[index]) * STATUS_LED_FADE_PEAK) / 255U);
+    }
 
-    // Output a true hardware PWM duty cycle to your fade pin
-    // Note: Make sure your chosen LED pin supports PWM! (On Teensy 4.1, almost all pins do)
-    analogWrite(STATUS_LED, BREATHE_TABLE[index]);
+    analogWrite(STATUS_LED, level);
     ledUnderPwm = true;
 }
 
 static void doubleFlash() {
-    const uint32_t cycleDuration = 1200; // Total duration of the pattern in ms
-        
-    // This collapses the infinite timeline of millis() into a repeating 0-1199ms window
-    uint32_t currentCycleTime = millis() % cycleDuration;
-
-    if (currentCycleTime < 100) {
-        // 0ms to 99ms -> First Strobe
-        ledWrite(true);
-    } 
-    else if (currentCycleTime >= 100 && currentCycleTime < 250) {
-        // 100ms to 249ms -> Dark gap
-        ledWrite(false);
-    } 
-    else if (currentCycleTime >= 250 && currentCycleTime < 350) {
-        // 250ms to 349ms -> Second Strobe
-        ledWrite(true);
-    } 
-    else {
-        // 350ms to 1199ms -> Long dark pause before cycle resets
-        ledWrite(false);
-    }
-    
+    const uint32_t cycleDuration = 6000;
+    const uint32_t pulseSpacing = 1500;
+    const uint32_t pulseOn = 750;
+    const uint32_t phase = millis() % cycleDuration;
+    ledWrite(phase < (2 * pulseSpacing) && (phase % pulseSpacing) < pulseOn);
 }
 
 
@@ -329,30 +359,29 @@ static void doubleFlash() {
  * per-state patterns.
  */
 /**
- * Three quick strobes then a long pause: the comm watchdog tripped.
+ * Three slow pulses then a long pause: the comm watchdog tripped.
  *
- * Deliberately distinct from doubleFlash()'s two strobes and from the 50 ms
- * FAULT_ERROR panic blink, because those are the two patterns it is most
- * likely to be read next to.
+ * The pulse count distinguishes it from flight's two pulses and the regular
+ * FAULT_ERROR blink without relying on fast strobes.
  */
 static void tripleFlash() {
     // The watchdog returns before the state switch. Give the NeoPixels an
     // explicit amber alert here so they cannot retain the previous flight color.
-    //                    R    G   B  W  Brightness  OnMs  OffMs
-    updateNeoLights({{255, 96,  0, 0,     96,         80,   120},  // Light 1
-                     {255, 96,  0, 0,     96,         80,   120}}, // Light 2
-                    true);
+    //                    R    G   B  W  Peak    OnMs  OffMs
+    updateNeoLights({{255, 96,  0, 0,     24,   1500,  2500},  // Light 1
+                     {255, 96,  0, 0,     24,   1500,  2500}}, // Light 2
+                    NeoLightPattern::BREATHE, true);
 
-    const uint32_t cycleDuration = 1500; // Total duration of the pattern in ms
-    const uint32_t strobeSpacing = 200;  // Start to start of each strobe
-    const uint32_t strobeOn = 80;        // Lit portion of each strobe
+    const uint32_t cycleDuration = 7500; // Total duration of the pattern in ms
+    const uint32_t pulseSpacing = 1500;  // Start to start of each pulse
+    const uint32_t pulseOn = 750;        // Lit portion of each pulse
 
     // Collapse the infinite timeline of millis() into a repeating window, then
-    // strobe inside the first three slots and stay dark for the rest.
+    // pulse inside the first three slots and stay dark for the rest.
     uint32_t currentCycleTime = millis() % cycleDuration;
 
-    bool lit = currentCycleTime < (3 * strobeSpacing) &&
-               (currentCycleTime % strobeSpacing) < strobeOn;
+    bool lit = currentCycleTime < (3 * pulseSpacing) &&
+               (currentCycleTime % pulseSpacing) < pulseOn;
 
     ledWrite(lit);
 }
@@ -361,7 +390,7 @@ void updateLEDS() {
     static bool ledOn = false;
     static uint32_t lastLEDToggle = 0;
 
-    uint32_t blinkInterval = 500; // Nominal blink interval every 500ms
+    uint32_t blinkInterval = 1000; // Original status LED: one second on/off.
 
     // The trip indication outranks the per-state pattern. A watchdog trip
     // leaves the vehicle in SAFE, and SAFE's breathe reads as a healthy idle -
@@ -373,87 +402,92 @@ void updateLEDS() {
     }
 
     switch (currentState) {
-        // Example colors/timings: edit each light independently in chain order.
-        // Each row: {Red, Green, Blue, White, Brightness, OnMs, OffMs}.
-        // RGBW/brightness: 0..255. Times: 0..65535 ms. OffMs = 0 means steady.
-        // The original STATUS_LED patterns below continue alongside the chain.
+        // Settings are in chain order, with RGBW/brightness values from 0..255.
+        // Base row: {Red, Green, Blue, White, PeakBrightness, OnMs, OffMs}.
+        // Optional trailing fields: {MinimumBrightness, FlashCount, FlashGapMs}.
+        // BREATHE OnMs covers a full rise/fall; FLASH OnMs covers each flash.
+        // OffMs follows the full cycle/group; FlashGapMs separates its flashes.
+        // Both lights solid blue at approximately 50% brightness.
         case States::BOOT:
             updateNeoLights({
-                {  0,   0, 255,   0,  64,    0,    0}, // Light 1: steady blue
-                {  0,   0, 255,   0,  64,    0,    0}  // Light 2: steady blue
-            });
+                {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
+                {  0,   0, 255,   0, 128,    0,    0}  // Light 2: solid blue
+            }, NeoLightPattern::SOLID);
             break;
 
-        case States::RADIO_SETUP :
+        // Keep light 1 blue; identify radio setup with solid yellow on light 2.
+        case States::RADIO_SETUP:
             updateNeoLights({
-                {  0,   0, 255,   0,  64,  100,  100}, // Light 1: blinking blue
-                {  0,   0,   0, 255,  32,    0,    0}  // Light 2: steady white
-            });
-            blinkInterval = 100; // Blink every 100 ms during radio setup
-            break;
-        
-        case States::SENSOR_SETUP :
-            updateNeoLights({
-                {255,   0, 255,   0,  64,  300,  300}, // Light 1: blinking purple
-                {255,   0, 255,   0,  64,  600,  600}  // Light 2: slower purple
-            });
-            blinkInterval = 300; // Blink every 300 ms during sensor setup
+                {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
+                {255, 255,   0,   0, 128,    0,    0}  // Light 2: solid yellow
+            }, NeoLightPattern::SOLID);
+            blinkInterval = 1000;
             break;
 
+        // Keep light 1 blue; identify sensor setup with solid purple on light 2.
+        case States::SENSOR_SETUP:
+            updateNeoLights({
+                {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
+                {255,   0, 255,   0, 128,    0,    0}  // Light 2: solid purple
+            }, NeoLightPattern::SOLID);
+            blinkInterval = 1000;
+            break;
+
+        // Keep light 1 blue; identify control setup with the white channel on light 2.
         case States::CONTROL_SETUP:
             updateNeoLights({
-                {  0, 255, 255,   0,  64,  200,  200}, // Light 1: blinking cyan
-                {  0, 255, 255,   0,  64,    0,    0}  // Light 2: steady cyan
-            });
+                {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
+                {  0,   0,   0, 255, 128,    0,    0}  // Light 2: solid white
+            }, NeoLightPattern::SOLID);
             break;
 
-        case States::SAFE :
+        // Continuous green, breathing from about 25% to 75% with a short bright crest.
+        case States::SAFE:
             updateNeoLights({
-                {  0, 255,   0,   0,  48,    0,    0}, // Light 1: steady green
-                {  0, 255,   0,   0,  48,    0,    0}  // Light 2: steady green
-            });
+                {  0, 255,   0,   0, 191, 4000,    0,  64}, // Light 1: green, 25..75%
+                {  0, 255,   0,   0, 191, 4000,    0,  64}  // Light 2: green, 25..75%
+            }, NeoLightPattern::BREATHE);
             ledFader();
             return;
 
+        // The same continuous 25..75% breathe as SAFE, with both lights red.
         case States::READY_ARMED:
             updateNeoLights({
-                {255,  96,   0,   0,  96,  500,  500}, // Light 1: blinking amber
-                {255,  96,   0,   0,  96,  500,  500}  // Light 2: blinking amber
-            });
-            blinkInterval = 500;
+                {255,   0,   0,   0, 191, 4000,    0,  64}, // Light 1: red, 25..75%
+                {255,   0,   0,   0, 191, 4000,    0,  64}  // Light 2: red, 25..75%
+            }, NeoLightPattern::BREATHE);
+            blinkInterval = 1500;
             break;
 
-        case States::MAN_FLIGHT  :
+        // Full-brightness green/red: 100 ms on, 500 ms off, repeat.
+        case States::MAN_FLIGHT:
             updateNeoLights({
-                {255,   0,   0,   0,  96,    0,    0}, // Light 1: steady red
-                {  0, 255,   0,   0,  96,    0,    0}  // Light 2: steady green
-            });
+                {  0, 255,   0,   0, 255,  100,  500,   0,   1,   0}, // Light 1: green single flash
+                {255,   0,   0,   0, 255,  100,  500,   0,   1,   0}  // Light 2: red single flash
+            }, NeoLightPattern::FLASH);
             doubleFlash();
             return;
 
-        case States::AUTO_FLIGHT :
+        // Full-brightness green/red: 100 ms on/off/on, then 500 ms off.
+        case States::AUTO_FLIGHT:
             updateNeoLights({
-                {255,   0,   0,   0,  96,  100,  900}, // Light 1: flashing red
-                {  0, 255,   0,   0,  96,  250,  750}  // Light 2: flashing green
-            });
+                {  0, 255,   0,   0, 255,  100,  500,   0,   2, 100}, // Light 1: green double flash
+                {255,   0,   0,   0, 255,  100,  500,   0,   2, 100}  // Light 2: red double flash
+            }, NeoLightPattern::FLASH);
             doubleFlash();
             return;
 
-        case States::FAULT_ERROR :
-            updateNeoLights({
-                {255,   0,   0,   0, 128,   50,   50}, // Light 1: fast red
-                {255,   0,   0,   0, 128,   50,   50}  // Light 2: fast red
-            });
-            blinkInterval = 50; // PaNiC
-            break;
+        // Both lights red at 50%: the same double flash and 500 ms pause as AUTO_FLIGHT.
+        case States::FAULT_ERROR: // Intentionally fall through to the default fault pattern.
 
-        default :
+        default:
             updateNeoLights({
-                {  0,   0,   0,   0,   0,    0,    0}, // Light 1: off
-                {  0,   0,   0,   0,   0,    0,    0}  // Light 2: off
-            });
+                {255,   0,   0,   0, 128,  100,  500,   0,   2, 100}, // Light 1: red double flash, 50%
+                {255,   0,   0,   0, 128,  100,  500,   0,   2, 100}  // Light 2: red double flash, 50%
+            }, NeoLightPattern::FLASH);
+            blinkInterval = 1000;
             break;
-        }
+    }
 
     if (millis() - lastLEDToggle >= blinkInterval) {
         ledOn = !ledOn;

@@ -225,17 +225,45 @@ A structured error system is planned: an internal buffer of errors, each with a 
 
 ## LED Indicators
 
-The status LED is updated on every pass through `loop()` and during startup.
+The status LED and two RGBW NeoPixels are updated from `loop()` and during startup.
+Set `NEOPIXEL_DATA_PIN` in `drone.cpp` to enable the RGBW chain; `-1` disables it.
+Each state's two rows specify `{red, green, blue, white, peakBrightness, fadeMs, offMs}`
+in chain order. Brightness and channels use 0..255. `fadeMs` covers the complete
+fade in and out; `0` disables that pixel. Active fades take at least 1000 ms,
+followed by at least 500 ms fully dark, even if a shorter pause is configured.
+
+Every active RGBW pattern breathes gently and has a dark pause:
+
+| State / condition | Light 1 / light 2 | Peak brightness | Fade / dark pause |
+| --- | --- | ---: | --- |
+| `BOOT` | Blue / blue | 16 | 1 s / 2.5 s |
+| `RADIO_SETUP` | Blue / white | 16 / 8 | 1 s / 2 s; 1 s / 3 s |
+| `SENSOR_SETUP` | Purple / purple | 12 | 1.2 s / 2.8 s; 1.6 s / 3.4 s |
+| `CONTROL_SETUP` | Cyan / cyan | 12 | 1 s / 2 s |
+| `SAFE` | Green / green | 12 | 1 s / 4 s |
+| `READY_ARMED` | Amber / amber | 24 | 1.5 s / 2.5 s |
+| `MAN_FLIGHT` | Red / green | 48 | 3 s / 1.5 s |
+| `AUTO_FLIGHT` | Red / green | 48 | 4 s / 2 s |
+| `FAULT_ERROR` | Red / red | 24 | 1.5 s / 1.5 s |
+| Watchdog tripped | Amber / amber | 24 | 1.5 s / 2.5 s; overrides state |
+| Unknown state | Off / off | 0 | Disabled |
+
+RGBW rendering is limited to 50 frames per second during a state, with immediate
+handling of transitions; only changed frames are transmitted. These settings
+reduce brightness and lit time; actual current depends on the pixel hardware.
+
+The original single status LED also avoids rapid strobes:
 
 | Pattern                         |         Timing | State / condition          | Meaning                                                  |
 | ------------------------------- | -------------: | -------------------------- | -------------------------------------------------------- |
-| Blink                           |         100 ms | `RADIO_SETUP`              | Bringing up the radio                                    |
-| Blink                           |         300 ms | `SENSOR_SETUP`             | Initializing sensors                                     |
-| Breathing fade                  |   2,000 ms cycle | `SAFE`                   | All systems up, no movement allowed                      |
-| Blink                           |         500 ms | `READY_ARMED` (and others) | Gimbal movement allowed                                  |
-| Double flash                    | 1,200 ms cycle | `MAN_FLIGHT`/`AUTO_FLIGHT` | Flight state                                             |
-| Triple flash, then pause        | 1,500 ms cycle | Watchdog tripped           | Link was lost while movement was allowed; overrides the state pattern until the operator requests `SAFE` |
-| Rapid blink                     |          50 ms | `FAULT_ERROR`              | Unrecoverable fault                                      |
+| Slow blink                      | 1 s on / 1 s off | `RADIO_SETUP`           | Bringing up the radio                                    |
+| Slow blink                      | 1 s on / 1 s off | `SENSOR_SETUP`          | Initializing sensors                                     |
+| Dim breathing fade              | 4 s fade / 2 s off | `SAFE`                | All systems up, no movement allowed                      |
+| Slow blink                      | 1.5 s on / 1.5 s off | `READY_ARMED`       | Gimbal movement allowed                                  |
+| Two slow pulses                 | 750 ms each / 6 s cycle | `MAN_FLIGHT`/`AUTO_FLIGHT` | Flight state                                      |
+| Three slow pulses, then pause   | 750 ms each / 7.5 s cycle | Watchdog tripped | Link was lost while movement was allowed; overrides the state pattern until the operator requests `SAFE` |
+| Slow blink                      | 1 s on / 1 s off | `FAULT_ERROR`           | Unrecoverable fault                                      |
+| Slow blink                      | 1 s on / 1 s off | Other states            | Startup / unrecognized state                             |
 
 ---
 

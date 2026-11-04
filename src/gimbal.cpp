@@ -10,7 +10,7 @@ namespace Gimbal {
 
 // Servo GPIO pins
 static constexpr int PITCH_SERVO_PIN = 24;
-static constexpr int YAW_SERVO_PIN = 25;
+static constexpr int YAW_SERVO_PIN = -1; // pin is 25, set -1 for neopixel test
 
 // Degrees. Some difference in these is normal to account for tooth placement.
 static constexpr int PITCH_ZERO = 90;
