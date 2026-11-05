@@ -139,8 +139,8 @@ void getTelemetry(Telemetry_t& out) {
 // Wire light 1 DOUT to light 2 DIN. This chain contains two individual pixels.
 // Use a separate pin from STATUS_LED, which still drives the original LED.
 static constexpr int16_t NEOPIXEL_DATA_PIN = 25;
-// Assumed RGBW byte order; change this if your specific lights use another order.
-static constexpr neoPixelType NEOPIXEL_TYPE = NEO_GRBW + NEO_KHZ800;
+// These lights expect red, green, blue, then white bytes on the data wire.
+static constexpr neoPixelType NEOPIXEL_TYPE = NEO_RGBW + NEO_KHZ800;
 static constexpr uint16_t NEOPIXEL_COUNT = 2;
 // Bound refresh work; flash timing is configured independently of breathe timing.
 static constexpr uint32_t NEOPIXEL_FRAME_MS = 20;
@@ -441,20 +441,20 @@ void updateLEDS() {
             }, NeoLightPattern::SOLID);
             break;
 
-        // Continuous green, breathing from about 25% to 75% with a short bright crest.
+        // Continuous green, breathing from about 1% to 50% with a short bright crest.
         case States::SAFE:
             updateNeoLights({
-                {  0, 255,   0,   0, 191, 4000,    0,  64}, // Light 1: green, 25..75%
-                {  0, 255,   0,   0, 191, 4000,    0,  64}  // Light 2: green, 25..75%
+                {  0, 255,   0,   0, 128, 4000,    0,   3}, // Light 1: green, ~1..50%
+                {  0, 255,   0,   0, 128, 4000,    0,   3}  // Light 2: green, ~1..50%
             }, NeoLightPattern::BREATHE);
             ledFader();
             return;
 
-        // The same continuous 25..75% breathe as SAFE, with both lights red.
+        // The same continuous 1..50% breathe as SAFE, with both lights red.
         case States::READY_ARMED:
             updateNeoLights({
-                {255,   0,   0,   0, 191, 4000,    0,  64}, // Light 1: red, 25..75%
-                {255,   0,   0,   0, 191, 4000,    0,  64}  // Light 2: red, 25..75%
+                {255,   0,   0,   0, 128, 4000,    0,   3}, // Light 1: red, ~1..50%
+                {255,   0,   0,   0, 128, 4000,    0,   3}  // Light 2: red, ~1..50%
             }, NeoLightPattern::BREATHE);
             blinkInterval = 1500;
             break;
