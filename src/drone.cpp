@@ -450,11 +450,11 @@ void updateLEDS() {
             ledFader();
             return;
 
-        // The same continuous 1..50% breathe as SAFE, with both lights red.
+        // The same continuous 1..50% breathe as SAFE, with both lights yellow.
         case States::READY_ARMED:
             updateNeoLights({
-                {255,   0,   0,   0, 128, 4000,    0,   3}, // Light 1: red, ~1..50%
-                {255,   0,   0,   0, 128, 4000,    0,   3}  // Light 2: red, ~1..50%
+                {255,   255,   0,   0, 128, 4000,    0,   3}, // Light 1: yellow, ~1..50%
+                {255,   255,   0,   0, 128, 4000,    0,   3}  // Light 2: yellow, ~1..50%
             }, NeoLightPattern::BREATHE);
             blinkInterval = 1500;
             break;
@@ -850,7 +850,8 @@ bool requestState(States state) {
         case States::READY_ARMED :
             currentState = state;
             return true;
-        
+
+        case States::AUTO_FLIGHT :
         case States::MAN_FLIGHT :
             // Zero motor output before transition. Masked for the same
             // reason as setTarget(): the control tick must not read a
@@ -864,8 +865,9 @@ bool requestState(States state) {
             currentState = state;
             return true;
     
-        case States::AUTO_FLIGHT :
-            return false; // Not implemented
+        // case States::AUTO_FLIGHT :
+            // return false; // Not implemented
+
     default:
         return false;
         break;
