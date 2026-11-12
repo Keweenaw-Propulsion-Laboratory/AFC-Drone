@@ -3,6 +3,7 @@
 #include "RH_RF69.h"
 #include "configs.h"
 #include "drone.h"
+#include "logger.h"
 
 namespace Radio {
 
@@ -185,6 +186,78 @@ namespace Radio {
             uint64_t reserved : 54;
         };
 
+        /**
+         * SD logger status, sent once a second as three packets. Mirrors the
+         * USB LOG_STATUS record with coarser units, to fit eight bytes each.
+         * The flags byte uses the same bits as the USB record.
+         */
+        static constexpr uint8_t LOG_FLAG_FILE_OPEN        = 1 << 0;
+        static constexpr uint8_t LOG_FLAG_HAVE_FILE        = 1 << 1;
+        static constexpr uint8_t LOG_FLAG_CARD_UNMOUNTABLE = 1 << 2;
+        static constexpr uint8_t LOG_FLAG_SLOW_FILESYSTEM  = 1 << 3;
+        static constexpr uint8_t LOG_FLAG_CARD_REMOVED     = 1 << 4;
+
+        struct __attribute__((packed)) LogStatusMsg0_t {
+            uint8_t state;      // Logger::State
+            uint8_t flags;      // LOG_FLAG_*
+            uint16_t fileIndex; // n of LOGnnn.BIN
+            uint32_t fileKiB;   // Size of the open (or last) log file
+        };
+
+        struct __attribute__((packed)) LogStatusMsg1_t {
+            uint32_t freeKiB;          // Space a log can still grow into
+            uint16_t minutesRemaining; // At the logging rate; saturates
+            uint16_t cardGiB;          // Card capacity
+        };
+
+        struct __attribute__((packed)) LogStatusMsg2_t {
+            uint16_t dropped;      // Records lost to a full buffer; saturates
+            uint8_t writeErrors;   // Saturates
+            uint8_t bufferPeakPct; // Fullest the RAM buffer has been
+            uint8_t commandCount;  // +1 per LOG_CONTROL handled, either link; wraps
+            uint8_t commandResult; // Logger::Result of the latest LOG_CONTROL
+            uint8_t filesRecycled; // Old logs deleted to make room; saturates
+            uint8_t marks;         // Marks written since boot; wraps
+        };
+
+        /** Same layout as the USB LOG_CONTROL, at its 8-byte minimum. */
+        struct __attribute__((packed)) LogControl_t {
+            Logger::Action action;
+            char label[7]; // Mark label; NUL-padded
+        };
+
+        /**
+         * Clock synchronisation with the base station (pendulum timing test).
+         *
+         * Two-way exchange, as in NTP. The base station sends TIME_PING and
+         * notes t1, the moment its RFM69 reported PacketSent. The drone notes
+         * t2, the moment its RFM69 reported PayloadReady for that ping, and
+         * answers with TIME_PONG; t3 is when that pong's PacketSent fires, and
+         * t4 is when the base station's PayloadReady fires for it. Every one
+         * of those is micros() captured in the RFM69 DIO0 interrupt, not when
+         * loop() gets round to the packet, so loop jitter and the tx queue's
+         * wait do not enter into it.
+         *
+         *   offset (drone - base) = ((t2 - t1) + (t3 - t4)) / 2
+         *
+         * t3 is only known after the pong has left, so each pong carries the
+         * t3 of the pong before it, as an offset from that pong's t2.
+         */
+        struct __attribute__((packed)) TimePing_t {
+            uint8_t seq;        // Base station's ping counter (low byte); wraps
+            uint8_t reserved[7];
+        };
+
+        /** prevTxMinusRx value meaning "no t3 to report". */
+        static constexpr uint16_t TIME_PONG_NO_PREV = 0xFFFF;
+
+        struct __attribute__((packed)) TimePong_t {
+            uint8_t seq;            // seq of the ping this answers
+            uint8_t prevSeq;        // seq of the earlier pong prevTxMinusRx describes
+            uint32_t rxUs;          // t2: drone micros() at PayloadReady of ping `seq`
+            uint16_t prevTxMinusRx; // t3 - t2 of pong `prevSeq`, us; TIME_PONG_NO_PREV if unknown
+        };
+
         // Wire-format sizes. The radio payload is fixed at 8 bytes, so anything
         // that changes one of these silently breaks every ground-station and
         // dashboard client parsing it. See docs/code-conventions.md section 9.
@@ -199,6 +272,12 @@ namespace Radio {
         static_assert(sizeof(Command_t) == 8, "Command_t wire size changed");
         static_assert(sizeof(ConfigPacket) == 8, "ConfigPacket wire size changed");
         static_assert(sizeof(HeartbeatPacket) == 8, "HeartbeatPacket wire size changed");
+        static_assert(sizeof(LogStatusMsg0_t) == 8, "LogStatusMsg0_t wire size changed");
+        static_assert(sizeof(LogStatusMsg1_t) == 8, "LogStatusMsg1_t wire size changed");
+        static_assert(sizeof(LogStatusMsg2_t) == 8, "LogStatusMsg2_t wire size changed");
+        static_assert(sizeof(LogControl_t) == 8, "LogControl_t wire size changed");
+        static_assert(sizeof(TimePing_t) == 8, "TimePing_t wire size changed");
+        static_assert(sizeof(TimePong_t) == 8, "TimePong_t wire size changed");
 
         // union all of the radio messages for type safety
         union Message {
@@ -213,8 +292,14 @@ namespace Radio {
             Command_t command;
             ConfigPacket config;
             HeartbeatPacket heartbeat;
+            LogStatusMsg0_t logStatus0;
+            LogStatusMsg1_t logStatus1;
+            LogStatusMsg2_t logStatus2;
+            LogControl_t logControl;
+            TimePing_t timePing;
+            TimePong_t timePong;
 
-            char textArray[8];            
+            char textArray[8];          
         };
     
         // Ensure that all messages are 8 bytes
@@ -233,7 +318,12 @@ namespace Radio {
             COMMAND = 8,
             CONFIG = 9,
             HEARTBEAT = 10,
-
+            LOG_STATUS0 = 11,
+            LOG_STATUS1 = 12,
+            LOG_STATUS2 = 13,
+            LOG_CONTROL = 14,
+            TIME_PING = 15, // Base station -> drone, see TimePing_t
+            TIME_PONG = 16, // Drone -> base station, see TimePong_t
         };
 
     struct __attribute__((packed)) DataPacket {
@@ -293,6 +383,9 @@ namespace Radio {
     void sendStatus4(const Drone::Telemetry_t& t);
     void sendStatus5(const Drone::Telemetry_t& t);
     void sendStatus6(const Drone::Telemetry_t& t);
+
+    /** Sends the SD logger's status as LOG_STATUS0-2. loop() calls this about once a second. */
+    void sendLogStatus();
     
 
     /**

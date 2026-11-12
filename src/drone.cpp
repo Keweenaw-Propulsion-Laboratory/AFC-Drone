@@ -6,6 +6,7 @@
 #include "gimbal.h"
 #include "motor.h"
 #include "battery.h"
+#include "logger.h"
 
 static constexpr int CONTROL_LOOP_HZ = 1000;
 static constexpr int CONTROL_LOOP_US = (1000000 / CONTROL_LOOP_HZ);
@@ -63,6 +64,31 @@ static volatile Target_t activeTarget;
 // MARK: Helpers
 
 States getState() {return currentState;}
+
+static const char* stateName(States state) {
+    switch (state) {
+    case States::BOOT:          return "BOOT";
+    case States::RADIO_SETUP:   return "RADIO_SETUP";
+    case States::SENSOR_SETUP:  return "SENSOR_SETUP";
+    case States::CONTROL_SETUP: return "CONTROL_SETUP";
+    case States::SAFE:          return "SAFE";
+    case States::READY_ARMED:   return "READY_ARMED";
+    case States::MAN_FLIGHT:    return "MAN_FLIGHT";
+    case States::AUTO_FLIGHT:   return "AUTO_FLIGHT";
+    case States::FAULT_ERROR:   return "FAULT_ERROR";
+    }
+    return "UNKNOWN";
+}
+
+/**
+ * Note a state change in the SD log, so flight phases can be found in it
+ * without reconstructing them from the telemetry's state column.
+ */
+static void logTransition(States from, States to) {
+    char text[48];
+    snprintf(text, sizeof(text), "STATE %s -> %s", stateName(from), stateName(to));
+    Logger::note(text);
+}
 
 /**
  * ISR fired by the hardware timer at CONTROL_LOOP_HZ.
@@ -331,12 +357,22 @@ bool startup() {
     USB::update(); // Update the USB stack to allow for prints
     updateLEDS(); // Update status LEDS
 
+    // Each stage below may move currentState on; the change is noted in the
+    // SD log on the way out. The logger itself comes up during BOOT, so the
+    // first transition it can record is BOOT -> RADIO_SETUP.
+    const States entryState = currentState;
+
     switch (currentState)
     {
     case States::BOOT:
         // This state handles any internal initialization that the controller may need to do
         pinMode(STATUS_LED, OUTPUT);       
         
+        // Setup logging to SD card. Not a system failure on fault. Handles its own message.
+        if(Logger::setup() && Logger::setupComplete()) {
+            USB::sendText("DRONE: SD LOGGING SETUP SUCESS");
+        }
+
         if(!Battery::setup()) {
             currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage BOOT -> BATTERY");
@@ -418,6 +454,8 @@ bool startup() {
     default:
         break;
     }
+
+    if (currentState != entryState) logTransition(entryState, currentState);
 
     if (currentState == States::SAFE){
         USB::sendText("Drone ARMED");
@@ -511,6 +549,7 @@ void update() {
     Motor::setMotor(activeSlot.bottomMotor, activeSlot.topMotor);
 
     recordTelemetry();
+    Logger::record(telemetry);
 }
 
 
@@ -559,6 +598,7 @@ static uint32_t safeEntryMs = 0;
 static void onWatchdogExpired() {
     mechanismWatchdog.tripped = true;
     USB::sendText("DRONE: COMM WATCHDOG EXPIRED -> SAFE");
+    Logger::note("COMM WATCHDOG EXPIRED");
     requestState(States::SAFE);
 }
 
@@ -638,7 +678,8 @@ bool getWatchdogTripped() {
 
 bool requestState(States state) {
     // If the requested state is the current state skip
-    if (getState() == state) {return true;}
+    const States from = getState();
+    if (from == state) {return true;}
 
     // Perform checks to allow a safe transition
     if (getState() == States::FAULT_ERROR) {
@@ -655,10 +696,12 @@ bool requestState(States state) {
             // pushing the dwell back.
             safeEntryMs = millis();
             currentState = state;
+            logTransition(from, state);
             return true;            
 
         case States::READY_ARMED :
             currentState = state;
+            logTransition(from, state);
             return true;
         
         case States::MAN_FLIGHT :
@@ -672,6 +715,7 @@ bool requestState(States state) {
 
             // Update state
             currentState = state;
+            logTransition(from, state);
             return true;
     
         case States::AUTO_FLIGHT :

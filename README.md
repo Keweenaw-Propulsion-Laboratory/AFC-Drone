@@ -33,6 +33,7 @@ New contributors should start with these documents:
 | [Dashboard Protocol Reference](docs/dashboard-protocol.md) | Byte-level USB and RFM69 protocol, configuration keys, heartbeat and watchdog rules |
 | [Battery Monitor](docs/battery/batteryinfo.md) | Voltage-divider hardware, thresholds and smoothing |
 | [Battery Charging](docs/battery-charging.md) | Charger settings, charging and storage procedures for the 4S LiPo |
+| [Pendulum Timing Test](docs/pendulum-timing-test.md) | Wiring, setup, running and analyzing the gyro-vs-base-station timing test |
 
 Pull requests follow the template in [.github/pull_request_template.md](.github/pull_request_template.md).
 

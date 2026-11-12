@@ -11,6 +11,7 @@
 #include "motor.h"
 #include "configs.h"
 #include "battery.h"
+#include "logger.h"
 
 namespace Radio {
 
@@ -23,8 +24,61 @@ static constexpr int RFM69_CS = 10;
 static constexpr int RFM69_INT = 40;
 static constexpr int RFM69_RST = 41;  
 
+/**
+ * RH_RF69 with the moment of every DIO0 interrupt recorded.
+ *
+ * DIO0 rises on PacketSent while transmitting and on PayloadReady while
+ * receiving, both at a fixed point at the end of a packet. Stamping micros()
+ * there, instead of when loop() notices the packet, is what makes the clock
+ * sync with the base station good to microseconds rather than to however long
+ * a loop pass takes. RadioHead's own _lastPreambleTime is only millis().
+ *
+ * RadioHead attaches its isr0() in init(); attachTimedInterrupt() replaces that
+ * with timedIsr(), which stamps the time and then runs the driver's normal
+ * handler.
+ */
+class TimedRF69 : public RH_RF69 {
+public:
+    TimedRF69(uint8_t cs, uint8_t irq) : RH_RF69(cs, irq), irqPin(irq) { self = this; }
+
+    /** Call after init(), which attached RadioHead's own handler. */
+    void attachTimedInterrupt() {
+        attachInterrupt(digitalPinToInterrupt(irqPin), timedIsr, RISING);
+    }
+
+    /** micros() at PayloadReady of the packet waiting in the rx buffer. */
+    uint32_t lastRxUs() const { return rxUs; }
+
+    /** micros() at PacketSent of the most recent transmission. */
+    uint32_t lastTxDoneUs() const { return txDoneUs; }
+
+    /** +1 per PacketSent; tells a caller its packet has gone out. */
+    uint32_t txDoneCount() const { return txDone; }
+
+private:
+    static void timedIsr() {
+        const uint32_t now = micros();
+        const RHMode before = self->_mode;
+        self->handleInterrupt();
+        if (before == RHModeTx && self->_mode != RHModeTx) {
+            self->txDoneUs = now;
+            self->txDone = self->txDone + 1;
+        } else if (before == RHModeRx && self->_rxBufValid) {
+            self->rxUs = now;
+        }
+    }
+
+    static TimedRF69* self;
+    const uint8_t irqPin;
+    volatile uint32_t rxUs = 0;
+    volatile uint32_t txDoneUs = 0;
+    volatile uint32_t txDone = 0;
+};
+
+TimedRF69* TimedRF69::self = nullptr;
+
 // Initialize static variables
-static RH_RF69 radio = RH_RF69(RFM69_CS, RFM69_INT); // Construct the radio driver
+static TimedRF69 radio(RFM69_CS, RFM69_INT); // Construct the radio driver
 static uint8_t radioPacketNum = 0; // Set packet number to zero;
 
 static int16_t avgRSSI = 0;
@@ -56,6 +110,23 @@ static uint32_t lastLinkPingTime = 0;
 static constexpr uint32_t LINK_RETRY_MS = 1000;
 
 static void updateLink();
+
+// MARK: Clock sync state
+//
+// The pong whose PacketSent we are waiting for, and the last one whose t3 is
+// known. See Radio::TimePong_t.
+static bool pongInFlight = false;
+static uint8_t pongInFlightSeq = 0;
+static uint32_t pongInFlightRxUs = 0;
+static uint32_t pongInFlightTxCount = 0;
+
+static bool havePrevPong = false;
+static uint8_t prevPongSeq = 0;
+static uint16_t prevPongTxMinusRx = TIME_PONG_NO_PREV;
+
+static void handleTimePing(Message msg, uint32_t rxUs);
+static void serviceTimePong();
+static void sendMessageFirst(Message data, MessageType type);
 
 static void handleCommand(Message msg);
 static void handleConfig(Message msg);
@@ -124,6 +195,7 @@ bool setup() {
                 USB::sendText("Radio start failed");
                 return false;
             }
+            radio.attachTimedInterrupt();
 
             setupState = SetupStates::SET_CONFIG;
             return true;
@@ -222,10 +294,16 @@ void update() {
         // traffic and never gates arming or the control loop.
         updateLink();
 
+        // A pong that has finished sending now has its t3.
+        serviceTimePong();
+
         // Check if radio has available packets
         if (radio.available()) {
             uint8_t buffer[RH_RF69_MAX_MESSAGE_LEN];
             uint8_t len = sizeof(buffer);
+            // Taken before recv(), which re-arms the receiver: a following
+            // packet could otherwise restamp it first.
+            const uint32_t rxUs = radio.lastRxUs();
 
             if( radio.recv(buffer, &len) ) { // Get message from radio
                 int16_t newRssi = radio.lastRssi();
@@ -283,6 +361,18 @@ void update() {
                     handleConfig(msg);
                     break;
                 
+                case MessageType::LOG_CONTROL :
+                    // Same 8 bytes as the USB LOG_CONTROL minimum: action,
+                    // then up to 7 characters of mark label.
+                    Logger::command(msg.logControl.action, msg.logControl.label,
+                                    strnlen(msg.logControl.label, sizeof(msg.logControl.label)));
+                    sendLogStatus();
+                    break;
+
+                case MessageType::TIME_PING :
+                    handleTimePing(msg, rxUs);
+                    break;
+
                 case MessageType::HEARTBEAT :
                     // Feeds the watchdog and applies the requested state. The
                     // request is only acted on when it CHANGES - see
@@ -322,6 +412,16 @@ void update() {
             radio.setHeaderId(header.msgNum);
             radio.setHeaderFlags(header.packetType);
 
+            // Nothing else is on the air (mode is not Tx), so the next
+            // PacketSent is this packet's.
+            if (packet.type == MessageType::TIME_PONG) {
+                serviceTimePong(); // Settle the previous pong before tracking this one
+                pongInFlight = true;
+                pongInFlightSeq = packet.message.timePong.seq;
+                pongInFlightRxUs = packet.message.timePong.rxUs;
+                pongInFlightTxCount = radio.txDoneCount();
+            }
+
             radio.send(frame, sizeof(frame)); // Non-blocking transmit start
             if (Configs::get().usbRelayEnabled) {
                 USB::radioRelay(packet.message, packet.type, header.msgNum,
@@ -351,6 +451,63 @@ static void sendMessage(Message data, MessageType type) {
         txDropped++;
 
     txBuffer.push_back({data, type});
+}
+
+/**
+ * Queue a packet ahead of everything else waiting. For the clock-sync pong,
+ * which must not sit behind a telemetry frame and push t3 - t2 past what its
+ * 16-bit field holds.
+ */
+static void sendMessageFirst(Message data, MessageType type) {
+    if (setupState == SetupStates::DISABLED)
+        return;
+
+    // Full: make room by losing the newest queued packet rather than pushing
+    // into a full buffer, whose behaviour at the front is not defined.
+    if (txBuffer.size() >= TX_SIZE) {
+        txBuffer.pop_back();
+        txDropped++;
+    }
+
+    txBuffer.push_front({data, type});
+}
+
+// MARK: Clock sync
+
+/**
+ * Answer a base-station TIME_PING with t2, and the t3 of the previous pong.
+ *
+ * @param rxUs micros() at the ping's PayloadReady interrupt.
+ */
+static void handleTimePing(Message msg, uint32_t rxUs) {
+    Message reply{};
+    reply.timePong.seq = msg.timePing.seq;
+    reply.timePong.rxUs = rxUs;
+    reply.timePong.prevSeq = prevPongSeq;
+    reply.timePong.prevTxMinusRx = havePrevPong ? prevPongTxMinusRx : TIME_PONG_NO_PREV;
+
+    sendMessageFirst(reply, MessageType::TIME_PONG);
+}
+
+/** Once the pong in flight has gone out, record its t3. */
+static void serviceTimePong() {
+    if (!pongInFlight || radio.txDoneCount() == pongInFlightTxCount)
+        return;
+
+    pongInFlight = false;
+    const uint32_t txUs = radio.lastTxDoneUs();
+    const uint32_t delta = txUs - pongInFlightRxUs;
+
+    havePrevPong = true;
+    prevPongSeq = pongInFlightSeq;
+    prevPongTxMinusRx = delta < TIME_PONG_NO_PREV ? static_cast<uint16_t>(delta)
+                                                  : TIME_PONG_NO_PREV;
+
+    Logger::TimeSyncRecord rec{};
+    rec.seq = pongInFlightSeq;
+    rec.rxUs = pongInFlightRxUs;
+    rec.txUs = txUs;
+    Logger::recordTimeSync(rec);
 }
 
 // MARK: Status Senders
@@ -440,6 +597,47 @@ void sendStatus6(const Drone::Telemetry_t& t) {
     msg.status6.empty = 0;
 
     sendMessage(msg, MessageType::STATUS6);
+}
+
+// MARK: Log status
+
+void sendLogStatus() {
+    Logger::Status status;
+    Logger::getStatus(status);
+
+    const uint8_t flags =
+        (status.fileOpen ? LOG_FLAG_FILE_OPEN : 0) |
+        (status.haveFile ? LOG_FLAG_HAVE_FILE : 0) |
+        (status.cardUnmountable ? LOG_FLAG_CARD_UNMOUNTABLE : 0) |
+        (status.slowFilesystem ? LOG_FLAG_SLOW_FILESYSTEM : 0) |
+        (status.cardRemoved ? LOG_FLAG_CARD_REMOVED : 0);
+
+    Message msg{};
+    msg.logStatus0.state = static_cast<uint8_t>(status.state);
+    msg.logStatus0.flags = flags;
+    msg.logStatus0.fileIndex = status.fileIndex;
+    msg.logStatus0.fileKiB = status.fileBytes / 1024;
+    sendMessage(msg, MessageType::LOG_STATUS0);
+
+    msg = Message{};
+    msg.logStatus1.freeKiB = static_cast<uint32_t>(min(status.freeBytes / 1024,
+                                                       static_cast<uint64_t>(UINT32_MAX)));
+    msg.logStatus1.minutesRemaining = static_cast<uint16_t>(min(status.secondsRemaining / 60,
+                                                               static_cast<uint32_t>(UINT16_MAX)));
+    msg.logStatus1.cardGiB = static_cast<uint16_t>(min(status.cardBytes >> 30,
+                                                       static_cast<uint64_t>(UINT16_MAX)));
+    sendMessage(msg, MessageType::LOG_STATUS1);
+
+    msg = Message{};
+    msg.logStatus2.dropped = static_cast<uint16_t>(min(status.dropped, static_cast<uint32_t>(UINT16_MAX)));
+    msg.logStatus2.writeErrors = static_cast<uint8_t>(min(status.writeErrors, static_cast<uint32_t>(UINT8_MAX)));
+    msg.logStatus2.bufferPeakPct = status.bufferBytes == 0 ? 0 : static_cast<uint8_t>(
+        static_cast<uint64_t>(status.highWaterBytes) * 100 / status.bufferBytes);
+    msg.logStatus2.commandCount = status.commandCount;
+    msg.logStatus2.commandResult = static_cast<uint8_t>(status.commandResult);
+    msg.logStatus2.filesRecycled = static_cast<uint8_t>(min(status.filesRecycled, static_cast<uint16_t>(UINT8_MAX)));
+    msg.logStatus2.marks = static_cast<uint8_t>(status.marks);
+    sendMessage(msg, MessageType::LOG_STATUS2);
 }
 
 // MARK: Message Handlers

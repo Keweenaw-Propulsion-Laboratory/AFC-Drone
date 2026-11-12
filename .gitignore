@@ -6,3 +6,6 @@
 onshape/secrets.json
 */.venv
 docs/.~lock.*
+.claude/
+test.data/
+disconnect/

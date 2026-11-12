@@ -1,6 +1,7 @@
 #include "gyro.h"
 #include "usb.h"
 #include "configs.h"
+#include "logger.h"
 
 namespace Gyro {
 
@@ -26,7 +27,6 @@ enum GyroSetupStates : uint8_t {
 
 static Adafruit_BNO08x gyro(GYRO_RESET);
 static euler_t ypr;
-static sh2_SensorValue_t sensorValue;
 
 static DroneState droneState;
 
@@ -50,6 +50,36 @@ static float droneQuatJ = 0.0f;
 static float droneQuatK = 0.0f;
 
 static uint32_t lastCheck = 0;
+
+/**
+ * BNO08x H_INTN, active low: asserted while the sensor has a transfer waiting,
+ * released when the host starts reading it. Its falling edge is the reference
+ * the SH-2 report timestamps count back from, so stamping it gives every report
+ * its true sample time. -1 falls back to polling every 2 ms, with sample times
+ * up to a poll interval late.
+ */
+static constexpr int GYRO_INT_PIN = 22;
+
+/** Report intervals, us. The calibrated gyro is what the pendulum test reads. */
+static constexpr uint32_t GYRO_INTERVAL_US = 2500;         // 400 Hz
+static constexpr uint32_t ROTATION_INTERVAL_US = 5000;     // 200 Hz
+static constexpr uint32_t LINEAR_ACCEL_INTERVAL_US = 5000; // 200 Hz
+
+/** Transfers serviced per update() at most, so a backlog cannot stall loop(). */
+static constexpr uint8_t MAX_TRANSFERS_PER_UPDATE = 4;
+
+/** An INT edge older than this cannot belong to the transfer being read. */
+static constexpr uint32_t INT_STALE_US = 20000;
+
+static volatile uint32_t lastIntUs = 0;
+
+/** Reference time for the transfer sh2_service() is reading; see onSensorEvent(). */
+static uint32_t serviceRefUs = 0;
+static bool serviceRefFromInt = false;
+
+static void onIntFalling() { lastIntUs = micros(); }
+static void onSensorEvent(void* cookie, sh2_SensorEvent_t* event);
+static void handleSensorValue(const sh2_SensorValue_t& value);
 
 // ---- internal helpers ----
 
@@ -99,6 +129,16 @@ bool setup() {
         // is polled over I2C every main-loop iteration, so bump to 400 kHz
         // Fast Mode (the documented safe max) to keep that poll cheap.
         Wire.setClock(400000);
+
+        // Route reports to onSensorEvent() instead of the library's handler,
+        // which keeps only the last report of a transfer and drops the rest.
+        // Installed before any report is enabled, so none reach the old one.
+        sh2_setSensorCallback(onSensorEvent, nullptr);
+
+        if (GYRO_INT_PIN >= 0) {
+            pinMode(GYRO_INT_PIN, INPUT_PULLUP);
+            attachInterrupt(digitalPinToInterrupt(GYRO_INT_PIN), onIntFalling, FALLING);
+        }
         state = EnableReport;
         break;
     
@@ -110,12 +150,16 @@ bool setup() {
         https://learn.adafruit.com/adafruit-9-dof-orientation-imu-fusion-breakout-bno085/report-types
 
         */
-        if (! gyro.enableReport(SH2_GAME_ROTATION_VECTOR, 5000)) { // 200 hz
+        if (! gyro.enableReport(SH2_GAME_ROTATION_VECTOR, ROTATION_INTERVAL_US)) {
             USB::sendText("Could not enable stabilized rotation vector");
             return false;
         }
-        if (! gyro.enableReport(SH2_LINEAR_ACCELERATION, 5000)) {
+        if (! gyro.enableReport(SH2_LINEAR_ACCELERATION, LINEAR_ACCEL_INTERVAL_US)) {
             USB::sendText("Could not enable Linear Acceleration report");
+            return false;
+        }
+        if (! gyro.enableReport(SH2_GYROSCOPE_CALIBRATED, GYRO_INTERVAL_US)) {
+            USB::sendText("Could not enable calibrated gyroscope report");
             return false;
         }
         USB::sendText("Gyro Complete");
@@ -142,21 +186,86 @@ void update(){
     // If gyro is not initialized, skip
     if (state != GyroSetupStates::Complete) return;
 
-    // Reports arrive at 200 Hz (5 ms); polling I2C faster than that just
-    // blocks on empty transactions. Throttle to every 2 ms (2.5x
-    // oversampling) so most main-loop iterations skip the I2C call entirely.
+    if (GYRO_INT_PIN >= 0) {
+        // INT says when a transfer is waiting, so the bus is only touched when
+        // there is something to read.
+        for (uint8_t i = 0; i < MAX_TRANSFERS_PER_UPDATE; i++) {
+            if (digitalRead(GYRO_INT_PIN) != LOW) return;
+
+            // INT stays low until the read starts, so the latest falling edge
+            // is the one for the transfer about to be read.
+            noInterrupts();
+            const uint32_t edge = lastIntUs;
+            interrupts();
+            serviceRefFromInt = (micros() - edge) < INT_STALE_US;
+            serviceRefUs = serviceRefFromInt ? edge : micros();
+
+            sh2_service(); // Reports arrive in onSensorEvent()
+        }
+        return;
+    }
+
+    // No INT line: reports arrive at up to 400 Hz; poll every 2 ms so most
+    // main-loop iterations skip the I2C call entirely.
     static elapsedMicros sincePoll = 0;
     if (sincePoll < 2000) return;
     sincePoll = 0;
 
-    // Check if Gyro has new data
-    if (!gyro.getSensorEvent(&sensorValue)) {
-        // No available data
-        return;
+    serviceRefFromInt = false;
+    serviceRefUs = micros();
+    sh2_service();
+}
+
+/**
+ * Called by sh2_service() once per report in the transfer it just read.
+ *
+ * The Adafruit I2C HAL reports the host interrupt time as 0, so the SH-2
+ * timestamp works out to the report's age at the INT edge, negative, in
+ * 100 us steps. Adding it to the edge time gives the sample time.
+ */
+static void onSensorEvent(void*, sh2_SensorEvent_t* event) {
+    sh2_SensorValue_t value;
+    if (sh2_decodeSensorEvent(&value, event) != SH2_OK) return;
+
+    const int32_t ageUs = static_cast<int32_t>(static_cast<uint32_t>(event->timestamp_uS));
+
+    Logger::ImuRecord rec{};
+    rec.sensorId = value.sensorId;
+    rec.sequence = value.sequence;
+    rec.status = value.status;
+    rec.flags = serviceRefFromInt ? Logger::IMU_FLAG_INT_TIMED : 0;
+    rec.intUs = serviceRefUs;
+    rec.sampleUs = serviceRefUs + ageUs;
+
+    switch (value.sensorId) {
+    case SH2_GYROSCOPE_CALIBRATED:
+        rec.v[0] = value.un.gyroscope.x;
+        rec.v[1] = value.un.gyroscope.y;
+        rec.v[2] = value.un.gyroscope.z;
+        Logger::recordImu(rec);
+        break;
+    case SH2_GAME_ROTATION_VECTOR:
+        rec.v[0] = value.un.gameRotationVector.i;
+        rec.v[1] = value.un.gameRotationVector.j;
+        rec.v[2] = value.un.gameRotationVector.k;
+        rec.v[3] = value.un.gameRotationVector.real;
+        Logger::recordImu(rec);
+        break;
+    case SH2_LINEAR_ACCELERATION:
+        rec.v[0] = value.un.linearAcceleration.x;
+        rec.v[1] = value.un.linearAcceleration.y;
+        rec.v[2] = value.un.linearAcceleration.z;
+        Logger::recordImu(rec);
+        break;
+    default:
+        break;
     }
 
+    handleSensorValue(value);
+}
 
-
+/** Fold one report into the orientation and dead-reckoning state. */
+static void handleSensorValue(const sh2_SensorValue_t& sensorValue) {
     // Setup only enables SH2_GAME_ROTATION_VECTOR, so that is the report that
     // actually arrives here; SH2_ROTATION_VECTOR is a different report ID and
     // would never match, leaving the quaternion stuck at identity.
