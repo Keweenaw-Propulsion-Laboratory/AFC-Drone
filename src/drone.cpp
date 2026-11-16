@@ -138,7 +138,7 @@ void getTelemetry(Telemetry_t& out) {
 // Set this to the GPIO connected to DIN on light 1; -1 disables NeoPixels.
 // Wire light 1 DOUT to light 2 DIN. This chain contains two individual pixels.
 // Use a separate pin from STATUS_LED, which still drives the original LED.
-static constexpr int16_t NEOPIXEL_DATA_PIN = 25;
+static constexpr int16_t NEOPIXEL_DATA_PIN = 9;
 // These lights expect red, green, blue, then white bytes on the data wire.
 static constexpr neoPixelType NEOPIXEL_TYPE = NEO_RGBW + NEO_KHZ800;
 static constexpr uint16_t NEOPIXEL_COUNT = 2;
@@ -175,6 +175,8 @@ static void updateNeoLights(
         return;
     }
 
+    // startup() services the lights before loop() is reachable, so initialize
+    // the driver on first use rather than waiting for normal loop servicing.
     static Adafruit_NeoPixel pixels(NEOPIXEL_COUNT, NEOPIXEL_DATA_PIN, NEOPIXEL_TYPE);
     static bool initialized = false;
     if (!initialized) {
@@ -190,10 +192,13 @@ static void updateNeoLights(
     static NeoLightPattern previousPattern = NeoLightPattern::BREATHE;
     static uint32_t cycleStartMs[NEOPIXEL_COUNT] = {};
     static uint32_t lastFrameMs = 0;
+    // Retain unsent changes while canShow() is false, even if RAM colors stop changing.
     static bool needsShow = true;
 
     const uint32_t nowMs = millis();
     const States state = currentState;
+    // A watchdog trip and its acknowledgement can both leave the vehicle in SAFE;
+    // track the indication separately so those transitions still restart the animation.
     const bool patternChanged = !patternStarted || state != previousState ||
                                 watchdogPattern != previousWatchdog || pattern != previousPattern;
     if (patternChanged) {
@@ -206,6 +211,7 @@ static void updateNeoLights(
         patternStarted = true;
     }
 
+    // Limit repeated animation work while letting state changes bypass the frame throttle.
     if (!patternChanged && nowMs - lastFrameMs < NEOPIXEL_FRAME_MS) {
         return;
     }
@@ -224,6 +230,8 @@ static void updateNeoLights(
             // Re-anchor each cycle so the animation survives millis() rollover.
             cycleStartMs[i] = nowMs - phaseMs;
             if (phaseMs < pulseMs) {
+                // sine8() reaches its minimum at phase 192, so each cycle starts
+                // at the configured brightness floor rather than halfway up the wave.
                 const uint8_t angle = static_cast<uint8_t>(192U + phaseMs * 256U / pulseMs);
                 uint8_t envelope = Adafruit_NeoPixel::sine8(angle);
                 const uint8_t floor = light.minimumBrightness < light.brightness
@@ -238,6 +246,7 @@ static void updateNeoLights(
                     ((light.brightness - floor) * envelope + 127U) / 255U);
             }
         } else if (pattern == NeoLightPattern::FLASH && light.onMs > 0 && light.flashCount > 0) {
+            // A group has N-1 short gaps; offMs is applied only after its final flash.
             const uint32_t spacingMs = static_cast<uint32_t>(light.onMs) + light.flashGapMs;
             const uint32_t activeMs = static_cast<uint32_t>(light.flashCount) * light.onMs +
                 static_cast<uint32_t>(light.flashCount - 1) * light.flashGapMs;
@@ -331,6 +340,7 @@ static const uint8_t BREATHE_TABLE[128] = {
      79,  85,  90,  97, 103, 109, 115, 121,
 };
 
+/** Hardware-PWM breathe for the separate single-color STATUS_LED. */
 static void ledFader() {
     const uint32_t phase = millis() % (BREATHE_PERIOD_MS + BREATHE_PAUSE_MS);
     uint8_t level = 0;
@@ -345,6 +355,7 @@ static void ledFader() {
     ledUnderPwm = true;
 }
 
+/** Two-pulse flight indication for the separate single-color STATUS_LED. */
 static void doubleFlash() {
     const uint32_t cycleDuration = 6000;
     const uint32_t pulseSpacing = 1500;
@@ -372,6 +383,7 @@ static void tripleFlash() {
                      {255, 96,  0, 0,     24,   1500,  2500}}, // Light 2
                     NeoLightPattern::BREATHE, true);
 
+    // The remaining pulse timing applies to STATUS_LED, independently of the RGBW chain.
     const uint32_t cycleDuration = 7500; // Total duration of the pattern in ms
     const uint32_t pulseSpacing = 1500;  // Start to start of each pulse
     const uint32_t pulseOn = 750;        // Lit portion of each pulse
@@ -386,6 +398,7 @@ static void tripleFlash() {
     ledWrite(lit);
 }
 
+/** Applies the state indication to both the RGBW chain and the separate STATUS_LED. */
 void updateLEDS() {
     static bool ledOn = false;
     static uint32_t lastLEDToggle = 0;
@@ -459,11 +472,11 @@ void updateLEDS() {
             blinkInterval = 1500;
             break;
 
-        // Full-brightness green/red: 100 ms on, 500 ms off, repeat.
+        // Full-brightness green/red: 100 ms on, 700 ms off; same 800 ms cycle as AUTO_FLIGHT.
         case States::MAN_FLIGHT:
             updateNeoLights({
-                {  0, 255,   0,   0, 255,  100,  500,   0,   1,   0}, // Light 1: green single flash
-                {255,   0,   0,   0, 255,  100,  500,   0,   1,   0}  // Light 2: red single flash
+                {  0, 255,   0,   0, 255,  100,  700,   0,   1,   0}, // Light 1: green single flash
+                {255,   0,   0,   0, 255,  100,  700,   0,   1,   0}  // Light 2: red single flash
             }, NeoLightPattern::FLASH);
             doubleFlash();
             return;

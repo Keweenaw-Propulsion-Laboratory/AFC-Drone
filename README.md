@@ -33,6 +33,11 @@ New contributors should start with these documents:
 | [Dashboard Protocol Reference](docs/dashboard-protocol.md) | Byte-level USB and RFM69 protocol, configuration keys, heartbeat and watchdog rules |
 | [Battery Monitor](docs/battery/batteryinfo.md) | Voltage-divider hardware, thresholds and smoothing |
 | [Battery Charging](docs/battery-charging.md) | Charger settings, charging and storage procedures for the 4S LiPo |
+| [NeoPixel LED Color Codes](docs/index.md) | Paired light previews, state meanings, and animation timing; view the MkDocs site for live animations |
+
+The LED reference is also set up as a MkDocs website. See
+[Documentation Site Setup](docs/site-maintenance.md) to preview it locally or
+enable automatic publishing with GitHub Pages.
 
 Pull requests follow the template in [.github/pull_request_template.md](.github/pull_request_template.md).
 
@@ -93,6 +98,25 @@ The drone uses a state machine to control startup and operation. The state value
 |    11 | `MAN_FLIGHT`    | Gimbal and motors follow manual commands                                    |
 |    12 | `AUTO_FLIGHT`   | Gimbal and motors driven by flight control. **Not implemented**; requests for it are refused |
 |   255 | `FAULT_ERROR`   | Unrecoverable fault. No transition out of it; a power cycle is required     |
+
+The two RGBW lights show the following colors and patterns, in chain order:
+
+| State / condition                  | Light 1 | Light 2 | Pattern      |
+| ---------------------------------- | ------- | ------- | ------------ |
+| `BOOT`                             | Blue    | Blue    | Solid        |
+| `RADIO_SETUP`                      | Blue    | Yellow  | Solid        |
+| `SENSOR_SETUP`                     | Blue    | Purple  | Solid        |
+| `CONTROL_SETUP`                    | Blue    | White   | Solid        |
+| `SAFE`                             | Green   | Green   | Breath       |
+| `READY_ARMED`                      | Yellow  | Yellow  | Breath       |
+| `MAN_FLIGHT`                       | Green   | Red     | Flash        |
+| `AUTO_FLIGHT`                      | Green   | Red     | Double Flash |
+| `FAULT_ERROR` / default            | Red     | Red     | Double Flash |
+| Watchdog tripped (overrides state) | Amber   | Amber   | Breath       |
+
+See the [NeoPixel LED reference](docs/index.md) for animation previews and exact
+timing. Animation is available in the MkDocs site; GitHub's Markdown view shows
+the written reference.
 
 Every state at or above `READY_ARMED` allows some movement, and the link watchdog enforces a timeout in all of them. Every state below `SAFE` is part of startup.
 

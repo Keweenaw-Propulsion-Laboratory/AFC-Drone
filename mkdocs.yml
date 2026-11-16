@@ -1,0 +1,52 @@
+site_name: AFC Drone Docs
+site_description: NeoPixel colors and status patterns for the AFC Drone flight computer.
+site_url: https://keweenaw-propulsion-laboratory.github.io/AFC-Drone/
+
+theme:
+  name: material
+  language: en
+  font: false
+  palette:
+    scheme: slate
+    primary: custom
+    accent: custom
+  icon:
+    logo: material/quadcopter
+  features:
+    - navigation.top
+    - toc.follow
+
+nav:
+  - Flight computer:
+      - LED Color Codes: index.md
+  - Project repository: https://github.com/Keweenaw-Propulsion-Laboratory/AFC-Drone
+
+# Publish only the NeoPixel reference and its assets. The other repository
+# guides remain in docs/ without being added to this site.
+exclude_docs: |
+  /*
+  !/index.md
+  !/assets/
+  !/stylesheets/
+  !/javascripts/
+
+plugins:
+  - search
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - toc:
+      permalink: true
+
+extra_css:
+  - stylesheets/leds.css
+
+extra_javascript:
+  - javascripts/leds.js
+
+extra:
+  generator: false
+
+copyright: Keweenaw Propulsion Laboratory · Michigan Technological University
