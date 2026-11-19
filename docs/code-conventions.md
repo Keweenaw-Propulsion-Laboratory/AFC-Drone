@@ -481,7 +481,7 @@ anything itself.
   FPU at all, so every floating-point operation is a software call, and
   `double` is far slower again. Write `0.1f`, not `0.1`; an unsuffixed literal
   promotes the whole expression to `double`. Prefer integer math or a lookup
-  table where it is easy — see `BREATHE_TABLE` in
+  table where it is easy — see `Adafruit_NeoPixel::sine8()` in
   [drone.cpp](../src/drone.cpp).
 
 **Rules for `loop()` code:**

@@ -33,6 +33,11 @@ New contributors should start with these documents:
 | [Dashboard Protocol Reference](docs/dashboard-protocol.md) | Byte-level USB and RFM69 protocol, configuration keys, heartbeat and watchdog rules |
 | [Battery Monitor](docs/battery/batteryinfo.md) | Voltage-divider hardware, thresholds and smoothing |
 | [Battery Charging](docs/battery-charging.md) | Charger settings, charging and storage procedures for the 4S LiPo |
+| [NeoPixel LED Color Codes](docs/index.md) | Paired light previews, state meanings, and animation timing; view the MkDocs site for live animations |
+
+The LED reference is also set up as a MkDocs website. See
+[Documentation Site Setup](docs/site-maintenance.md) to preview it locally or
+enable automatic publishing with GitHub Pages.
 
 Pull requests follow the template in [.github/pull_request_template.md](.github/pull_request_template.md).
 
@@ -65,7 +70,7 @@ The flight software is split into modules, one per subsystem. Each module is a n
 | Module             | Responsibility                                                                                             |
 | ------------------ | ---------------------------------------------------------------------------------------------------------- |
 | `main.cpp`         | Arduino entry point: startup, servicing the subsystems, and the 10 Hz telemetry send                     |
-| `drone.h/.cpp`     | State machine, startup sequence, 1 kHz control-timer ISR, telemetry snapshot, link watchdog, status LED    |
+| `drone.h/.cpp`     | State machine, startup sequence, 1 kHz control-timer ISR, telemetry snapshot, link watchdog, RGBW lights   |
 | `radio.h/.cpp`     | RFM69 bring-up, base-station link, packet definitions, command/config/heartbeat handling, status telemetry |
 | `usb.h/.cpp`       | Framed binary USB protocol: debug text, telemetry, radio relay, commands, configuration, heartbeat         |
 | `gyro.h/.cpp`      | BNO08x IMU setup, body-frame quaternion, world-frame acceleration, dead-reckoned velocity and position     |
@@ -84,7 +89,7 @@ The drone uses a state machine to control startup and operation. The state value
 
 | Value | State           | Description                                                                 |
 | ----: | --------------- | --------------------------------------------------------------------------- |
-|     0 | `BOOT`          | Configures the status LED and sets up the battery monitor                   |
+|     0 | `BOOT`          | Initializes the NeoPixels and sets up the battery monitor                    |
 |     1 | `RADIO_SETUP`   | Resets and configures the RFM69                                             |
 |     2 | `SENSOR_SETUP`  | Initializes the BNO08x IMU                                                  |
 |     3 | `CONTROL_SETUP` | Sets up the gimbal servos and ESCs and starts the 1 kHz control timer       |
@@ -93,6 +98,25 @@ The drone uses a state machine to control startup and operation. The state value
 |    11 | `MAN_FLIGHT`    | Gimbal and motors follow manual commands                                    |
 |    12 | `AUTO_FLIGHT`   | Gimbal and motors driven by flight control. **Not implemented**; requests for it are refused |
 |   255 | `FAULT_ERROR`   | Unrecoverable fault. No transition out of it; a power cycle is required     |
+
+The two RGBW lights show the following colors and patterns, in chain order:
+
+| State / condition                  | Light 1 | Light 2 | Pattern      |
+| ---------------------------------- | ------- | ------- | ------------ |
+| `BOOT`                             | Blue    | Blue    | Solid        |
+| `RADIO_SETUP`                      | Blue    | Yellow  | Solid        |
+| `SENSOR_SETUP`                     | Blue    | Purple  | Solid        |
+| `CONTROL_SETUP`                    | Blue    | White   | Solid        |
+| `SAFE`                             | Green   | Green   | Breath       |
+| `READY_ARMED`                      | Yellow  | Yellow  | Breath       |
+| `MAN_FLIGHT`                       | Green   | Red     | Flash        |
+| `AUTO_FLIGHT`                      | Green   | Red     | Double Flash |
+| `FAULT_ERROR` / default            | Red     | Red     | Double Flash |
+| Watchdog tripped (overrides state) | Amber   | Amber   | Breath       |
+
+See the [NeoPixel LED reference](docs/index.md) for animation previews and exact
+timing. Animation is available in the MkDocs site; GitHub's Markdown view shows
+the written reference.
 
 Every state at or above `READY_ARMED` allows some movement, and the link watchdog enforces a timeout in all of them. Every state below `SAFE` is part of startup.
 
@@ -106,9 +130,9 @@ After startup, state changes come from the ground station or dashboard as a requ
 
 ## Startup Control Flow
 
-`setup()` brings up the USB serial link, loads the persistent configuration from EEPROM, then calls `Drone::startup()` repeatedly until the vehicle reaches `SAFE`. Each startup stage is non-blocking, so the status LED and USB keep being serviced during startup.
+`setup()` brings up the USB serial link, loads the persistent configuration from EEPROM, then calls `Drone::startup()` repeatedly until the vehicle reaches `SAFE`. Each startup stage is non-blocking, so the NeoPixels and USB keep being serviced during startup.
 
-1. **`BOOT`**: configures the status LED pin and sets up the battery monitor. The firmware no longer waits for a USB connection.
+1. **`BOOT`**: initializes the NeoPixels on first use and sets up the battery monitor. The firmware no longer waits for a USB connection.
 2. **`RADIO_SETUP`**: resets the RFM69, initializes the RadioHead driver, and sets 915 MHz, the shared encryption key and the configured transmit power (14–20 dBm, high-power mode). Startup waits only for the radio hardware. Finding the base station is a separate background step (see [Radio and Telemetry](#radio-and-telemetry)), so a missing ground station does not hold up startup. If `RadioEnabled` is `0`, this stage is skipped without touching the SPI bus.
 3. **`SENSOR_SETUP`**: initializes the BNO08x over I²C and enables the game rotation vector and linear acceleration reports at 200 Hz. If `GyroEnabled` is `0`, this stage is skipped. GPS setup is planned but not yet part of the sequence.
 4. **`CONTROL_SETUP`**: sets up the gimbal servos and ESCs (ESCs are held at their idle pulse width), then starts the control-loop timer.
@@ -144,7 +168,7 @@ Each pass services, in order:
 3. Reading the IMU
 4. Battery sampling
 5. The link watchdog
-6. The status LED
+6. The NeoPixel lights
 
 Every 100 ms (about 10 Hz), `loop()` copies one telemetry snapshot from the control loop. It sends that snapshot as one USB `TELEMETRY` frame and as the radio `STATUS0`–`STATUS6` packets, so every packet in a frame describes the same instant.
 
@@ -159,7 +183,7 @@ Every 100 ms (about 10 Hz), `loop()` copies one telemetry snapshot from the cont
 The dashboard or ground station must send a `HEARTBEAT` message regularly, over either USB or radio, for the vehicle to keep moving. The heartbeat also carries the state the operator is requesting.
 
 * The watchdog expires **100 ms** after the last heartbeat. A 20–50 ms heartbeat interval is recommended.
-* When it expires, the gimbal and motor outputs fail safe within one control tick. The vehicle then drops to `SAFE` and latches a `TRIPPED` flag, which is reported in telemetry and shown on the status LED.
+* When it expires, the gimbal and motor outputs fail safe within one control tick. The vehicle then drops to `SAFE` and latches a `TRIPPED` flag, which is reported in telemetry and shown by amber breathing on the NeoPixels.
 * The requested state is **edge-triggered**: the firmware acts on it only when it changes. After a trip, the dashboard must request `SAFE` and then request the flight state again, so the vehicle never re-arms on its own when the link comes back.
 * A move up out of `SAFE` is refused until the vehicle has been in `SAFE` for at least 500 ms.
 * Motor output is allowed only in `MAN_FLIGHT` with the watchdog fed. Gimbal output is allowed at or above `READY_ARMED` with the watchdog fed.
@@ -225,17 +249,32 @@ A structured error system is planned: an internal buffer of errors, each with a 
 
 ## LED Indicators
 
-The status LED is updated on every pass through `loop()` and during startup.
+The two RGBW NeoPixels are updated from `loop()` and during startup.
+Set `NEOPIXEL_DATA_PIN` in `drone.cpp` to enable the RGBW chain; `-1` disables it.
+Each state's two rows specify `{red, green, blue, white, peakBrightness, fadeMs, offMs}`
+in chain order. Brightness and channels use 0..255. `fadeMs` covers the complete
+fade in and out; `0` disables that pixel. Active fades take at least 1000 ms,
+followed by at least 500 ms fully dark, even if a shorter pause is configured.
 
-| Pattern                         |         Timing | State / condition          | Meaning                                                  |
-| ------------------------------- | -------------: | -------------------------- | -------------------------------------------------------- |
-| Blink                           |         100 ms | `RADIO_SETUP`              | Bringing up the radio                                    |
-| Blink                           |         300 ms | `SENSOR_SETUP`             | Initializing sensors                                     |
-| Breathing fade                  |   2,000 ms cycle | `SAFE`                   | All systems up, no movement allowed                      |
-| Blink                           |         500 ms | `READY_ARMED` (and others) | Gimbal movement allowed                                  |
-| Double flash                    | 1,200 ms cycle | `MAN_FLIGHT`/`AUTO_FLIGHT` | Flight state                                             |
-| Triple flash, then pause        | 1,500 ms cycle | Watchdog tripped           | Link was lost while movement was allowed; overrides the state pattern until the operator requests `SAFE` |
-| Rapid blink                     |          50 ms | `FAULT_ERROR`              | Unrecoverable fault                                      |
+Every active RGBW pattern breathes gently and has a dark pause:
+
+| State / condition | Light 1 / light 2 | Peak brightness | Fade / dark pause |
+| --- | --- | ---: | --- |
+| `BOOT` | Blue / blue | 16 | 1 s / 2.5 s |
+| `RADIO_SETUP` | Blue / white | 16 / 8 | 1 s / 2 s; 1 s / 3 s |
+| `SENSOR_SETUP` | Purple / purple | 12 | 1.2 s / 2.8 s; 1.6 s / 3.4 s |
+| `CONTROL_SETUP` | Cyan / cyan | 12 | 1 s / 2 s |
+| `SAFE` | Green / green | 12 | 1 s / 4 s |
+| `READY_ARMED` | Amber / amber | 24 | 1.5 s / 2.5 s |
+| `MAN_FLIGHT` | Red / green | 48 | 3 s / 1.5 s |
+| `AUTO_FLIGHT` | Red / green | 48 | 4 s / 2 s |
+| `FAULT_ERROR` | Red / red | 24 | 1.5 s / 1.5 s |
+| Watchdog tripped | Amber / amber | 24 | 1.5 s / 2.5 s; overrides state |
+| Unknown state | Off / off | 0 | Disabled |
+
+RGBW rendering is limited to 50 frames per second during a state, with immediate
+handling of transitions; only changed frames are transmitted. These settings
+reduce brightness and lit time; actual current depends on the pixel hardware.
 
 ---
 
@@ -257,7 +296,7 @@ The wiring diagram was created using KiCad 9.0 and is maintained in the [AFC Wir
 | RFM69 interrupt | 40 | `radio.cpp` | |
 | RFM69 reset | 41 | `radio.cpp` | |
 | BNO08x IMU | I²C (`Wire`) | `gyro.cpp` | Default I²C pins |
-| Status LED | 9 | `drone.cpp` | Not yet wired on the flight computer |
+| NeoPixel data | 9 | `drone.cpp` | Two chained RGBW pixels |
 | Battery sense | — | `battery.cpp` | Not yet assigned (`BATTERY_PIN = -1`) |
 
 ---
@@ -287,5 +326,5 @@ Work still in progress includes:
 * Using the heartbeat's `enableMotors` / `enableGimbal` bits
 * Completing GPS support (the GPS fields currently carry fixed test values)
 * Implementing the structured error buffer and reporting errors over radio
-* Assigning the battery-sense pin and wiring the status LED
+* Assigning the battery-sense pin
 * Moving the remaining modules over to the [code conventions](docs/code-conventions.md#16-migration-status)

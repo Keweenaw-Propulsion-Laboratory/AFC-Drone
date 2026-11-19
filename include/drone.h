@@ -115,27 +115,21 @@ namespace Drone {
      void update();
 
     /**
-     * @brief Drives the status LED with the pattern for the current state.
+     * @brief Drives the two RGBW pixels for the current state.
      *
      * Call this once per pass through loop(): the patterns are built from
      * millis() and a little bit of internal state, so they only advance when
-     * this is called. The pattern is picked from Drone::getState():
+     * this is called. The pattern is picked from Drone::getState(), with a
+     * latched watchdog trip overriding it with amber breathing.
      *
-     * - RADIO_SETUP  - 100 ms blink
-     * - SENSOR_SETUP - 300 ms blink
-     * - SAFE         - 2 s sine "breathe" fade (hardware PWM)
-     * - READY_ARMED  - 500 ms blink
-     * - MAN_FLIGHT / AUTO_FLIGHT - repeating double strobe
-     * - FAULT_ERROR  - 50 ms panic blink
-     * - anything else - 500 ms blink
+     * Each pixel has its own RGBW, brightness and timing settings in drone.cpp
+     * for solid, breathing or flashing patterns. NEOPIXEL_DATA_PIN = -1
+     * disables the RGBW chain.
      *
-     * @warning STATUS_LED must already be configured as an output. That
-     * happens in the BOOT stage of startup(), so nothing should call this
-     * before startup() has run at least once.
-     *
-     * @warning Not interrupt safe - the SAFE fade reconfigures STATUS_LED
-     * through analogWrite()/pinMode(). Keep it out of update() and anything
-     * else running in interrupt context.
+     * @warning Not interrupt safe. NeoPixel show() briefly masks interrupts.
+     * Changed RGBW frames are sent at most every 20 ms during a state;
+     * transitions bypass that throttle.
+     * Keep this out of update() and anything else running in interrupt context.
      */
     void updateLEDS();
     

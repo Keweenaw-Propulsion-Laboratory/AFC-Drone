@@ -6,3 +6,5 @@
 onshape/secrets.json
 */.venv
 docs/.~lock.*
+.venv-docs/
+site/
