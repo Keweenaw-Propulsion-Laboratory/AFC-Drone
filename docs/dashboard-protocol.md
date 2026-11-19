@@ -341,8 +341,8 @@ its commands are.
 1. Every actuator guard fails closed within one 1 kHz control tick: motors are
    driven to their idle pulse width and servo writes are suppressed.
 2. The drone transitions to `SAFE` and latches an internal trip flag.
-3. The `TRIPPED` bit of the `watchDog` telemetry byte latches, the status LED
-   switches to a distinctive three-flash-then-pause pattern, and a `DEBUG_TEXT`
+3. The `TRIPPED` bit of the `watchDog` telemetry byte latches, both NeoPixels
+   switch to amber breathing, and a `DEBUG_TEXT`
    message reading `DRONE: COMM WATCHDOG EXPIRED -> SAFE` is emitted.
 
 ### Detecting a trip

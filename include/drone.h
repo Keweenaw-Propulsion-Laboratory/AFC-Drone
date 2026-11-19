@@ -115,32 +115,20 @@ namespace Drone {
      void update();
 
     /**
-     * @brief Drives the status LED and two RGBW pixels for the current state.
+     * @brief Drives the two RGBW pixels for the current state.
      *
      * Call this once per pass through loop(): the patterns are built from
      * millis() and a little bit of internal state, so they only advance when
-     * this is called. The pattern is picked from Drone::getState():
+     * this is called. The pattern is picked from Drone::getState(), with a
+     * latched watchdog trip overriding it with amber breathing.
      *
-     * All RGBW patterns fade from dark to a configured peak and back, then
-     * pause fully off. Each pixel has its own RGBW, peak, fade and pause values
-     * in drone.cpp. Non-flight peaks are 8..24/255; flight peaks are 48/255.
-     * Active fades take at least 1000 ms, followed by at least 500 ms dark.
-     * NEOPIXEL_DATA_PIN = -1 disables the RGBW chain until a pin is assigned.
+     * Each pixel has its own RGBW, brightness and timing settings in drone.cpp
+     * for solid, breathing or flashing patterns. NEOPIXEL_DATA_PIN = -1
+     * disables the RGBW chain.
      *
-     * The original single status LED uses these slower patterns:
-     * - RADIO_SETUP / SENSOR_SETUP / FAULT_ERROR / default - 1 s on/off
-     * - SAFE - dim 4 s breathe, then 2 s dark (hardware PWM)
-     * - READY_ARMED - 1.5 s on/off
-     * - MAN_FLIGHT / AUTO_FLIGHT - two 750 ms pulses per 6 s
-     * - watchdog tripped - three 750 ms pulses per 7.5 s, overriding the state
-     *
-     * @warning STATUS_LED must already be configured as an output. That
-     * happens in the BOOT stage of startup(), so nothing should call this
-     * before startup() has run at least once.
-     *
-     * @warning Not interrupt safe. The SAFE fade reconfigures STATUS_LED,
-     * and NeoPixel show() briefly masks interrupts. Changed RGBW frames are
-     * sent at most every 20 ms during a state; transitions bypass that throttle.
+     * @warning Not interrupt safe. NeoPixel show() briefly masks interrupts.
+     * Changed RGBW frames are sent at most every 20 ms during a state;
+     * transitions bypass that throttle.
      * Keep this out of update() and anything else running in interrupt context.
      */
     void updateLEDS();

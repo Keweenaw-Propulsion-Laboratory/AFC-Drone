@@ -28,8 +28,6 @@ static constexpr uint16_t COMM_WATCHDOG_SAFETY_MS = 100;
 // stalls the runtime stamp and stops the watchdog ever expiring.
 static constexpr uint8_t CONTROL_TIMER_PRIORITY = 64;
 
-static constexpr int STATUS_LED = 9; // TODO wire LED on flight computer
-
 namespace Drone {
 
 // Initialize state to BOOT
@@ -137,7 +135,6 @@ void getTelemetry(Telemetry_t& out) {
 
 // Set this to the GPIO connected to DIN on light 1; -1 disables NeoPixels.
 // Wire light 1 DOUT to light 2 DIN. This chain contains two individual pixels.
-// Use a separate pin from STATUS_LED, which still drives the original LED.
 static constexpr int16_t NEOPIXEL_DATA_PIN = 9;
 // These lights expect red, green, blue, then white bytes on the data wire.
 static constexpr neoPixelType NEOPIXEL_TYPE = NEO_RGBW + NEO_KHZ800;
@@ -280,137 +277,19 @@ static void updateNeoLights(
     }
 }
 
-/**
- * True once analogWrite() has handed STATUS_LED to a timer.
- *
- * analogWrite() configures the pin for a timer's alternate function. Whether
- * the pin then follows the GPIO output register or the timer is decided by
- * that configuration, and digitalWrite() does not touch it - it only writes
- * the output register, which the timer overrides. pinMode() is the call that
- * runs pwm_stop() and puts the pin back under GPIO control.
- *
- * Without this, the first ledFader() pass leaves the pin under the timer
- * forever: every later blink and doubleFlash() writes an output register
- * nothing is listening to, and the LED holds the fader's last duty cycle.
- */
-static bool ledUnderPwm = false;
-
-/** digitalWrite() for STATUS_LED that reclaims the pin from the timer first. */
-static void ledWrite(bool on) {
-    if (ledUnderPwm) {
-        pinMode(STATUS_LED, OUTPUT);
-        ledUnderPwm = false;
-    }
-    digitalWrite(STATUS_LED, on ? HIGH : LOW);
-}
-
-// The total time in milliseconds for one full breathe cycle (inhale + exhale)
-static constexpr uint32_t BREATHE_PERIOD_MS = 4000;
-static constexpr uint32_t BREATHE_PAUSE_MS = 2000;
-static constexpr uint8_t STATUS_LED_FADE_PEAK = 32;
-
-/**
- * One full period of 127.5 * (1 + sin(theta)), rounded to 8-bit duty cycles.
- *
- * Generated with:
- *   round(127.5 * (1 + sin(2 * pi * i / 128))) for i in 0..127
- *
- * A table keeps the fader off the floating point path. The nucleo_l152re bench
- * target is a Cortex-M3 with no FPU, so the old double-precision sin() was a
- * software call costing hundreds of cycles out of a loop() that has to fit
- * between 1 kHz control ticks. The table is scaled to STATUS_LED_FADE_PEAK
- * before use, with a dark pause between fades.
- */
-static const uint8_t BREATHE_TABLE[128] = {
-    128, 134, 140, 146, 152, 158, 165, 170,
-    176, 182, 188, 193, 198, 203, 208, 213,
-    218, 222, 226, 230, 234, 237, 240, 243,
-    245, 248, 250, 251, 253, 254, 254, 255,
-    255, 255, 254, 254, 253, 251, 250, 248,
-    245, 243, 240, 237, 234, 230, 226, 222,
-    218, 213, 208, 203, 198, 193, 188, 182,
-    176, 170, 165, 158, 152, 146, 140, 134,
-    128, 121, 115, 109, 103,  97,  90,  85,
-     79,  73,  67,  62,  57,  52,  47,  42,
-     37,  33,  29,  25,  21,  18,  15,  12,
-     10,   7,   5,   4,   2,   1,   1,   0,
-      0,   0,   1,   1,   2,   4,   5,   7,
-     10,  12,  15,  18,  21,  25,  29,  33,
-     37,  42,  47,  52,  57,  62,  67,  73,
-     79,  85,  90,  97, 103, 109, 115, 121,
-};
-
-/** Hardware-PWM breathe for the separate single-color STATUS_LED. */
-static void ledFader() {
-    const uint32_t phase = millis() % (BREATHE_PERIOD_MS + BREATHE_PAUSE_MS);
-    uint8_t level = 0;
-    if (phase < BREATHE_PERIOD_MS) {
-        // Index 96 starts at zero, avoiding a jump when the dark pause ends.
-        const uint32_t index = ((phase * 128) / BREATHE_PERIOD_MS + 96) % 128;
-        level = static_cast<uint8_t>(
-            (static_cast<uint16_t>(BREATHE_TABLE[index]) * STATUS_LED_FADE_PEAK) / 255U);
-    }
-
-    analogWrite(STATUS_LED, level);
-    ledUnderPwm = true;
-}
-
-/** Two-pulse flight indication for the separate single-color STATUS_LED. */
-static void doubleFlash() {
-    const uint32_t cycleDuration = 6000;
-    const uint32_t pulseSpacing = 1500;
-    const uint32_t pulseOn = 750;
-    const uint32_t phase = millis() % cycleDuration;
-    ledWrite(phase < (2 * pulseSpacing) && (phase % pulseSpacing) < pulseOn);
-}
-
-
-/**
- * Updates the status LED to match the current state. See drone.h for the
- * per-state patterns.
- */
-/**
- * Three slow pulses then a long pause: the comm watchdog tripped.
- *
- * The pulse count distinguishes it from flight's two pulses and the regular
- * FAULT_ERROR blink without relying on fast strobes.
- */
-static void tripleFlash() {
-    // The watchdog returns before the state switch. Give the NeoPixels an
-    // explicit amber alert here so they cannot retain the previous flight color.
-    //                    R    G   B  W  Peak    OnMs  OffMs
-    updateNeoLights({{255, 96,  0, 0,     24,   1500,  2500},  // Light 1
-                     {255, 96,  0, 0,     24,   1500,  2500}}, // Light 2
-                    NeoLightPattern::BREATHE, true);
-
-    // The remaining pulse timing applies to STATUS_LED, independently of the RGBW chain.
-    const uint32_t cycleDuration = 7500; // Total duration of the pattern in ms
-    const uint32_t pulseSpacing = 1500;  // Start to start of each pulse
-    const uint32_t pulseOn = 750;        // Lit portion of each pulse
-
-    // Collapse the infinite timeline of millis() into a repeating window, then
-    // pulse inside the first three slots and stay dark for the rest.
-    uint32_t currentCycleTime = millis() % cycleDuration;
-
-    bool lit = currentCycleTime < (3 * pulseSpacing) &&
-               (currentCycleTime % pulseSpacing) < pulseOn;
-
-    ledWrite(lit);
-}
-
-/** Applies the state indication to both the RGBW chain and the separate STATUS_LED. */
+/** Applies the current state or watchdog indication to the two RGBW pixels. */
 void updateLEDS() {
-    static bool ledOn = false;
-    static uint32_t lastLEDToggle = 0;
-
-    uint32_t blinkInterval = 1000; // Original status LED: one second on/off.
-
     // The trip indication outranks the per-state pattern. A watchdog trip
     // leaves the vehicle in SAFE, and SAFE's breathe reads as a healthy idle -
     // it gives the operator no way to tell "I was told to disarm" apart from
     // "the link dropped and I disarmed myself".
     if (getWatchdogTripped()) {
-        tripleFlash();
+        // The watchdog returns before the state switch. Give the NeoPixels an
+        // explicit amber alert here so they cannot retain the previous flight color.
+        //                    R    G   B  W  Peak    OnMs  OffMs
+        updateNeoLights({{255, 96,  0, 0,     24,   1500,  2500},  // Light 1
+                         {255, 96,  0, 0,     24,   1500,  2500}}, // Light 2
+                        NeoLightPattern::BREATHE, true);
         return;
     }
 
@@ -434,7 +313,6 @@ void updateLEDS() {
                 {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
                 {255, 255,   0,   0, 128,    0,    0}  // Light 2: solid yellow
             }, NeoLightPattern::SOLID);
-            blinkInterval = 1000;
             break;
 
         // Keep light 1 blue; identify sensor setup with solid purple on light 2.
@@ -443,7 +321,6 @@ void updateLEDS() {
                 {  0,   0, 255,   0, 128,    0,    0}, // Light 1: solid blue
                 {255,   0, 255,   0, 128,    0,    0}  // Light 2: solid purple
             }, NeoLightPattern::SOLID);
-            blinkInterval = 1000;
             break;
 
         // Keep light 1 blue; identify control setup with the white channel on light 2.
@@ -460,7 +337,6 @@ void updateLEDS() {
                 {  0, 255,   0,   0, 128, 4000,    0,   3}, // Light 1: green, ~1..50%
                 {  0, 255,   0,   0, 128, 4000,    0,   3}  // Light 2: green, ~1..50%
             }, NeoLightPattern::BREATHE);
-            ledFader();
             return;
 
         // The same continuous 1..50% breathe as SAFE, with both lights yellow.
@@ -469,7 +345,6 @@ void updateLEDS() {
                 {255,   255,   0,   0, 128, 4000,    0,   3}, // Light 1: yellow, ~1..50%
                 {255,   255,   0,   0, 128, 4000,    0,   3}  // Light 2: yellow, ~1..50%
             }, NeoLightPattern::BREATHE);
-            blinkInterval = 1500;
             break;
 
         // Full-brightness green/red: 100 ms on, 700 ms off; same 800 ms cycle as AUTO_FLIGHT.
@@ -478,7 +353,6 @@ void updateLEDS() {
                 {  0, 255,   0,   0, 255,  100,  700,   0,   1,   0}, // Light 1: green single flash
                 {255,   0,   0,   0, 255,  100,  700,   0,   1,   0}  // Light 2: red single flash
             }, NeoLightPattern::FLASH);
-            doubleFlash();
             return;
 
         // Full-brightness green/red: 100 ms on/off/on, then 500 ms off.
@@ -487,7 +361,6 @@ void updateLEDS() {
                 {  0, 255,   0,   0, 255,  100,  500,   0,   2, 100}, // Light 1: green double flash
                 {255,   0,   0,   0, 255,  100,  500,   0,   2, 100}  // Light 2: red double flash
             }, NeoLightPattern::FLASH);
-            doubleFlash();
             return;
 
         // Both lights red at 50%: the same double flash and 500 ms pause as AUTO_FLIGHT.
@@ -498,15 +371,7 @@ void updateLEDS() {
                 {255,   0,   0,   0, 128,  100,  500,   0,   2, 100}, // Light 1: red double flash, 50%
                 {255,   0,   0,   0, 128,  100,  500,   0,   2, 100}  // Light 2: red double flash, 50%
             }, NeoLightPattern::FLASH);
-            blinkInterval = 1000;
             break;
-    }
-
-    if (millis() - lastLEDToggle >= blinkInterval) {
-        ledOn = !ledOn;
-        // Digital write forces the LED to either a solid 0 or 255 duty cycle
-        ledWrite(ledOn);
-        lastLEDToggle = millis();
     }
 }
 
@@ -532,14 +397,12 @@ void setTarget(Target_t target) {
 bool startup() {
     // Step 1 Radio
     USB::update(); // Update the USB stack to allow for prints
-    updateLEDS(); // Update status LEDS
+    updateLEDS(); // Update NeoPixel indicators
 
     switch (currentState)
     {
     case States::BOOT:
         // This state handles any internal initialization that the controller may need to do
-        pinMode(STATUS_LED, OUTPUT);       
-        
         if(!Battery::setup()) {
             currentState = States::FAULT_ERROR;
             USB::sendText("DRONE: SETUP FAILURE in stage BOOT -> BATTERY");

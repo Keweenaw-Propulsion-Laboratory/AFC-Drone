@@ -48,9 +48,8 @@ GitHub Pages enabled and must satisfy any protection rules configured for the
 
 The reference follows the NeoPixel settings in `src/drone.cpp`:
 
-- `Drone::updateLEDS()` defines the nine state patterns.
-- `tripleFlash()` defines the **amber breathing** watchdog override for the
-  NeoPixels; its name describes the separate single-color LED.
+- `Drone::updateLEDS()` defines the nine state patterns and the **amber breathing**
+  watchdog override for the NeoPixels.
 
 Edit the matching row in `docs/index.md` when changing the firmware. Each
 `data-led-preview` element carries its animation settings:

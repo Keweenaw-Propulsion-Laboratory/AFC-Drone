@@ -1,5 +1,5 @@
 /* NeoPixel previews for docs/index.md. Keep the row data in sync with
- * updateLEDS() and tripleFlash() in src/drone.cpp; no drone connection is used.
+ * updateLEDS() in src/drone.cpp; no drone connection is used.
  */
 (() => {
   "use strict";
